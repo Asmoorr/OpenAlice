@@ -1,0 +1,121 @@
+import asyncio
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from openalice.app import create_app
+from openalice.config import Settings
+
+
+class FakeOpenClaw:
+    def __init__(self, answer: str = "Готовый ответ", delay: float = 0) -> None:
+        self.answer = answer
+        self.delay = delay
+        self.calls: list[tuple[str, str]] = []
+
+    async def ask(self, message: str, user: str) -> str:
+        self.calls.append((message, user))
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        return self.answer
+
+    async def close(self) -> None:
+        return None
+
+
+def settings(database_path: Path, **overrides: object) -> Settings:
+    values: dict[str, object] = {
+        "openclaw_gateway_token": "test-token",
+        "alice_webhook_secret": "a-very-long-test-secret",
+        "alice_fast_timeout_seconds": 0.2,
+        "database_path": database_path,
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def alice_request(command: str, message_id: int = 1, new: bool = False) -> dict[str, object]:
+    return {
+        "request": {
+            "command": command,
+            "original_utterance": command,
+            "type": "SimpleUtterance",
+        },
+        "session": {
+            "message_id": message_id,
+            "session_id": "alice-session",
+            "skill_id": "alice-skill",
+            "new": new,
+            "application": {"application_id": "application-1"},
+            "user": {"user_id": "user-1"},
+        },
+        "version": "1.0",
+    }
+
+
+def test_health(tmp_path: Path) -> None:
+    app = create_app(settings(tmp_path / "test.db"), FakeOpenClaw())
+    with TestClient(app) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_fast_openclaw_response_and_deduplication(tmp_path: Path) -> None:
+    fake = FakeOpenClaw(answer="**Короткий** [ответ](https://example.com)")
+    app = create_app(settings(tmp_path / "test.db"), fake)
+    with TestClient(app) as client:
+        first = client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("Вопрос"))
+        duplicate = client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("Вопрос"))
+
+    assert first.status_code == 200
+    assert first.json()["response"]["text"] == "Короткий ответ"
+    assert duplicate.json() == first.json()
+    assert len(fake.calls) == 1
+
+
+def test_deferred_response(tmp_path: Path) -> None:
+    fake = FakeOpenClaw(answer="Отложенный ответ", delay=0.3)
+    app = create_app(
+        settings(tmp_path / "test.db", alice_fast_timeout_seconds=0.11),
+        fake,
+    )
+    with TestClient(app) as client:
+        pending = client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("Долгий вопрос"))
+        assert "нужно немного времени" in pending.json()["response"]["text"]
+        import time
+
+        time.sleep(0.35)
+        result = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("готово", message_id=2),
+        )
+
+    assert result.json()["response"]["text"] == "Отложенный ответ"
+
+
+def test_allowlist_and_wrong_secret(tmp_path: Path) -> None:
+    fake = FakeOpenClaw()
+    app = create_app(
+        settings(tmp_path / "test.db", alice_allowed_user_ids=frozenset({"another-user"})),
+        fake,
+    )
+    with TestClient(app) as client:
+        denied = client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("Вопрос"))
+        missing = client.post("/alice/webhook/wrong", json=alice_request("Вопрос", message_id=2))
+
+    assert denied.json()["response"]["end_session"] is True
+    assert missing.status_code == 404
+    assert fake.calls == []
+
+
+def test_new_dialog_changes_openclaw_session(tmp_path: Path) -> None:
+    fake = FakeOpenClaw()
+    app = create_app(settings(tmp_path / "test.db"), fake)
+    with TestClient(app) as client:
+        client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("Первый вопрос"))
+        client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("новый диалог", message_id=2))
+        client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("Второй вопрос", message_id=3))
+
+    assert fake.calls[0][1].endswith(":v0")
+    assert fake.calls[1][1].endswith(":v1")
