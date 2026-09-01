@@ -193,13 +193,13 @@ Copy-Item .env.example .env
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 .\.venv\Scripts\python.exe -m uvicorn openalice.app:create_app `
-  --factory --host 127.0.0.1 --port 8000
+  --factory --host 127.0.0.1 --port 8765
 ```
 
 В другом терминале:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8765/health
 ```
 
 Ожидаемый ответ: `status = ok`, `service = openalice`.
@@ -217,6 +217,52 @@ ALICE_MAX_RESPONSE_CHARS=900
 DATABASE_PATH=./openalice.db
 LOG_LEVEL=INFO
 ```
+
+Пример заполненного `.env` с вымышленными значениями:
+
+```dotenv
+OPENCLAW_BASE_URL=http://127.0.0.1:18789
+OPENCLAW_GATEWAY_TOKEN=J7rKxY9_example_gateway_token_do_not_copy_Q2m
+OPENCLAW_AGENT=openclaw/default
+ALICE_WEBHOOK_SECRET=6mN_example_alice_webhook_secret_do_not_copy_p8V
+ALICE_ALLOWED_USER_IDS=879A1EXAMPLEUSERID,51B2EXAMPLEFAMILYID
+ALICE_FAST_TIMEOUT_SECONDS=3.8
+ALICE_MAX_RESPONSE_CHARS=900
+DATABASE_PATH=./openalice.db
+LOG_LEVEL=INFO
+```
+
+Не копируйте демонстрационные токены — они показаны только для понимания
+формата. Кавычки вокруг обычных значений не нужны.
+
+Откуда брать каждое значение:
+
+- `OPENCLAW_BASE_URL` — оставьте `http://127.0.0.1:18789`, если не меняли
+  стандартный локальный порт OpenClaw.
+- `OPENCLAW_GATEWAY_TOKEN` — после onboarding выполните в интерактивном
+  PowerShell `openclaw gateway auth-token --show`. Команда специально не
+  поддерживает перенаправление вывода. Если токена ещё нет:
+  `openclaw doctor --generate-gateway-token`, затем
+  `openclaw gateway restart` и снова `openclaw gateway auth-token --show`.
+- `OPENCLAW_AGENT` — для основного агента оставьте `openclaw/default`. Другой
+  агент задаётся как `openclaw/<agentId>`.
+- `ALICE_WEBHOOK_SECRET` — создайте самостоятельно командой из раздела выше.
+  Это значение станет секретной частью URL, а не токеном Яндекса.
+- `ALICE_ALLOWED_USER_IDS` — сначала оставьте пустым. В тестировании навыка
+  Яндекс Диалогов откройте тело последнего входного запроса и скопируйте
+  `session.user.user_id`. Несколько ID перечисляются через запятую без пробелов.
+- `ALICE_FAST_TIMEOUT_SECONDS` — оставьте `3.8`, чтобы сохранить запас до
+  дедлайна Яндекс Диалогов около 4,5 секунды.
+- `ALICE_MAX_RESPONSE_CHARS` — рекомендуется `900`; абсолютный максимум Алисы
+  равен 1024 символам.
+- `DATABASE_PATH` — локальная SQLite-база; `./openalice.db` подходит для одного
+  ноутбука.
+- `LOG_LEVEL` — `INFO` для обычной работы, `DEBUG` только при диагностике.
+
+Токен ngrok в `.env` OpenAlice не добавляется. Он хранится в конфигурации самой
+службы ngrok и берётся на странице
+<https://dashboard.ngrok.com/get-started/your-authtoken>. Назначенный публичный
+домен показан в Dashboard: <https://dashboard.ngrok.com/domains>.
 
 Реальный `.env` должен быть в `.gitignore`; в репозитории хранится только
 `.env.example` без секретов.
@@ -276,13 +322,26 @@ openalice:yandex-user:<sha256 исходного идентификатора>
 
 ### Команды самого адаптера
 
-До отправки текста агенту адаптер обрабатывает фиксированный набор:
+До отправки текста агенту адаптер распознаёт пять локальных намерений. Это не
+сравнение с коротким списком строк: нормализуются регистр, `ё/е`, знаки
+препинания и вежливые добавления, затем проверяются словоформы и структура всей
+фразы.
 
-- «помощь» / «что ты умеешь» — описание навыка;
-- «готово» / «проверь результат» — получить отложенный ответ;
-- «отмена» — отменить ожидающую задачу, если это позволяет API;
-- «новый диалог» — начать новый ключ сессии;
-- «выйти» / «хватит» — вернуть `end_session: true`.
+- справка: «помощь», «какие есть команды», «расскажи, что ты умеешь», «как этим
+  навыком пользоваться»;
+- результат: «готово», «покажи мне готовый ответ», «что там с моим запросом»,
+  «проверь текущую задачу»;
+- отмена: «отмени последний запрос», «остановить выполнение», «не надо», «я
+  передумала»;
+- новый контекст: «давай начнём новую беседу», «сбрось текущий контекст»,
+  «начни с начала»;
+- выход: «закрой этот навык», «заверши наш разговор», «до свидания», «хватит».
+
+Разрешены обращения и вежливые частицы: например, «Алиса, пожалуйста, покажи
+мне готовый ответ». При этом используется полное совпадение локального
+намерения. Поэтому «помоги написать письмо», «покажи результат вычисления» или
+«останови музыку» не перехватываются и отправляются OpenClaw как обычные задачи.
+Шаблоны находятся в `openalice/commands.py` и покрыты отдельными тестами.
 
 Всю остальную маршрутизацию выполняет OpenClaw, а не дерево условий OpenAlice.
 
@@ -307,10 +366,10 @@ ngrok config add-authtoken "<ТОКЕН_ИЗ_NGROK_DASHBOARD>"
 случайный адрес нельзя оставлять в настройках навыка, поскольку после его
 изменения Алиса потеряет webhook.
 
-Когда OpenAlice слушает `127.0.0.1:8000`, первый ручной запуск выглядит так:
+Когда OpenAlice слушает `127.0.0.1:8765`, первый ручной запуск выглядит так:
 
 ```powershell
-ngrok http 8000 --url https://example-name.ngrok-free.app
+ngrok http 8765 --url https://example-name.ngrok-free.app
 ```
 
 Проверьте публичный endpoint:
@@ -334,7 +393,7 @@ https://example-name.ngrok-free.app/alice/webhook/<ALICE_WEBHOOK_SECRET>
 Яндекс Диалоги не смогут пройти такую авторизацию.
 
 Не публикуйте через ngrok порт OpenClaw `18789` или другие локальные сервисы.
-Единственный публичный upstream — OpenAlice на порту 8000.
+Единственный публичный upstream — OpenAlice на порту 8765.
 
 ### 3.2. Ограничения домашнего варианта
 
@@ -401,7 +460,7 @@ openclaw gateway status --json
 1. перейти в `C:\Programming\2026\OpenAlice`;
 2. загрузить секреты из локального `.env`;
 3. запускает `.venv\Scripts\python.exe -m uvicorn openalice.app:create_app
-   --factory --host 127.0.0.1 --port 8000`;
+   --factory --host 127.0.0.1 --port 8765`;
 4. писать технические логи в `logs/`, не сохраняя секреты и полные реплики.
 
 В Планировщике заданий создайте задачу `OpenAlice`:
@@ -436,7 +495,7 @@ endpoints:
   - name: openalice
     url: https://example-name.ngrok-free.app
     upstream:
-      url: http://127.0.0.1:8000
+      url: http://127.0.0.1:8765
 ```
 
 Не храните этот файл в Git. Ограничьте доступ к нему, поскольку он содержит
@@ -478,7 +537,7 @@ ngrok service uninstall
 
 ```powershell
 openclaw gateway status --json
-Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8765/health
 Invoke-RestMethod https://example-name.ngrok-free.app/health
 ```
 

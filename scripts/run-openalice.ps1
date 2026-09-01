@@ -30,4 +30,4 @@ $pythonExecutable = Join-Path $projectDirectory ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $pythonExecutable)) {
     throw "Missing virtual environment: $pythonExecutable"
 }
-& $pythonExecutable -m uvicorn openalice.app:create_app --factory --host 127.0.0.1 --port 8000 *>> $logFile
+& $pythonExecutable -m uvicorn openalice.app:create_app --factory --host 127.0.0.1 --port 8765 *>> $logFile

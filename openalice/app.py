@@ -11,19 +11,13 @@ from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
 
 from openalice.alice_models import AliceWebhookRequest, AliceWebhookResponse, AliceResponseBody
+from openalice.commands import CommandIntent, detect_command_intent, normalize_command
 from openalice.config import Settings, get_settings
 from openalice.openclaw_client import OpenClawClient, OpenClawError
 from openalice.store import Store
 from openalice.text import shorten_for_alice
 
 logger = logging.getLogger("openalice")
-
-HELP_COMMANDS = {"помощь", "что ты умеешь", "что умеешь"}
-RESULT_COMMANDS = {"готово", "проверь результат", "результат"}
-CANCEL_COMMANDS = {"отмена", "отмени"}
-NEW_COMMANDS = {"новый диалог", "начать новый диалог", "новая беседа"}
-EXIT_COMMANDS = {"выйти", "выход", "хватит", "закончить"}
-
 
 @dataclass
 class Runtime:
@@ -114,7 +108,8 @@ async def _handle_request(
     request: AliceWebhookRequest,
     raw_identity: str,
 ) -> AliceWebhookResponse:
-    command = _normalize_command(request.request.command or request.request.original_utterance)
+    command = normalize_command(request.request.command or request.request.original_utterance)
+    intent = detect_command_intent(command)
     identity_hash = hashlib.sha256(raw_identity.encode("utf-8")).hexdigest()
     generation = await runtime.store.get_generation(identity_hash)
     conversation_id = f"openalice:yandex-user:{identity_hash}:v{generation}"
@@ -123,20 +118,20 @@ async def _handle_request(
         return _alice_response(
             "Это Открытый помощник. Задайте вопрос. Если ответ готовится долго, скажите «готово» немного позже."
         )
-    if command in HELP_COMMANDS:
+    if intent is CommandIntent.HELP:
         return _alice_response(
             "Я передаю ваши вопросы домашнему помощнику OpenClaw. Можно сказать «готово», «новый диалог», «отмена» или «выйти»."
         )
-    if command in EXIT_COMMANDS:
+    if intent is CommandIntent.EXIT:
         return _alice_response("До встречи.", end_session=True)
-    if command in NEW_COMMANDS:
+    if intent is CommandIntent.NEW_DIALOG:
         await _cancel_pending(runtime, conversation_id)
         await runtime.store.increment_generation(identity_hash)
         return _alice_response("Начинаю новый диалог. О чём поговорим?")
-    if command in CANCEL_COMMANDS:
+    if intent is CommandIntent.CANCEL:
         cancelled = await _cancel_pending(runtime, conversation_id)
         return _alice_response("Запрос отменён." if cancelled else "Сейчас нет ожидающего запроса.")
-    if command in RESULT_COMMANDS:
+    if intent is CommandIntent.RESULT:
         return await _get_deferred_result(runtime, conversation_id)
     if not command:
         return _alice_response("Я вас не расслышала. Повторите вопрос.")
@@ -210,10 +205,6 @@ def _raw_identity(request: AliceWebhookRequest) -> str:
     if request.session.user is not None:
         return request.session.user.user_id
     return request.session.application.application_id
-
-
-def _normalize_command(command: str) -> str:
-    return " ".join(command.casefold().strip().rstrip(".!?").split())
 
 
 def _alice_response(text: str, end_session: bool = False) -> AliceWebhookResponse:
