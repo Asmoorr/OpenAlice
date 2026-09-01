@@ -37,7 +37,8 @@ class Store:
             """
         )
 
-    async def set_job(self, conversation_id: str, status: str, response: str | None = None, error: str | None = None) -> None:
+    async def set_job(self, conversation_id: str, status: str, response: str | None = None,
+                      error: str | None = None) -> None:
         await self._execute(
             """
             INSERT INTO jobs(conversation_id, status, response, error, updated_at)

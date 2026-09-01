@@ -52,4 +52,3 @@ class AliceResponseBody(BaseModel):
 class AliceWebhookResponse(BaseModel):
     response: AliceResponseBody
     version: str = "1.0"
-

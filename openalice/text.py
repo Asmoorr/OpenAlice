@@ -1,6 +1,5 @@
 import re
 
-
 _MARKDOWN_LINK = re.compile(r"\[([^\]]+)]\([^\)]+\)")
 _MARKDOWN_DECORATION = re.compile(r"(?:\*\*|__|~~|`{1,3})")
 _HEADING_OR_QUOTE = re.compile(r"(?m)^\s{0,3}(?:#{1,6}|>)\s*")
@@ -34,4 +33,3 @@ def shorten_for_alice(text: str, limit: int) -> str:
     if word_end >= max(40, limit // 2):
         candidate = candidate[:word_end]
     return candidate.rstrip(" ,;:-") + "…"
-

@@ -2,10 +2,10 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
 
 from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
@@ -19,6 +19,7 @@ from openalice.text import shorten_for_alice
 
 logger = logging.getLogger("openalice")
 
+
 @dataclass
 class Runtime:
     settings: Settings
@@ -28,8 +29,8 @@ class Runtime:
 
 
 def create_app(
-    settings: Settings | None = None,
-    openclaw_client: OpenClawClient | None = None,
+        settings: Settings | None = None,
+        openclaw_client: OpenClawClient | None = None,
 ) -> FastAPI:
     resolved = settings or get_settings()
     logging.basicConfig(
@@ -40,7 +41,7 @@ def create_app(
         settings=resolved,
         store=Store(resolved.database_path),
         openclaw=openclaw_client
-        or OpenClawClient(
+                 or OpenClawClient(
             resolved.openclaw_base_url,
             resolved.openclaw_gateway_token,
             resolved.openclaw_agent,
@@ -49,13 +50,22 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        logger.info(
+            "stage=startup status=starting database=%s openclaw=%s agent=%s",
+            resolved.database_path,
+            resolved.openclaw_base_url,
+            resolved.openclaw_agent,
+        )
         await runtime.store.initialize()
+        logger.info("stage=startup status=ready")
         yield
+        logger.info("stage=shutdown status=starting pending_tasks=%d", len(runtime.pending_tasks))
         for task in runtime.pending_tasks.values():
             task.cancel()
         if runtime.pending_tasks:
             await asyncio.gather(*runtime.pending_tasks.values(), return_exceptions=True)
         await runtime.openclaw.close()
+        logger.info("stage=shutdown status=complete")
 
     app = FastAPI(
         title="OpenAlice",
@@ -73,15 +83,26 @@ def create_app(
 
     @app.post("/alice/webhook/{secret}")
     async def alice_webhook(
-        request: AliceWebhookRequest,
-        secret: str = Path(min_length=1),
+            request: AliceWebhookRequest,
+            secret: str = Path(min_length=1),
     ) -> JSONResponse:
+        started = time.perf_counter()
         if not hmac.compare_digest(secret, runtime.settings.alice_webhook_secret):
+            logger.warning("stage=authentication status=rejected reason=wrong_webhook_secret")
             raise HTTPException(status_code=404, detail="Not found")
 
         raw_identity = _raw_identity(request)
+        identity_ref = _identity_ref(raw_identity)
+        request_ref = _request_ref(request)
+        logger.info(
+            "stage=webhook status=received request=%s user=%s session_new=%s command_chars=%d",
+            request_ref,
+            identity_ref,
+            request.session.new,
+            len(request.request.command or request.request.original_utterance),
+        )
         if runtime.settings.alice_allowed_user_ids and raw_identity not in runtime.settings.alice_allowed_user_ids:
-            logger.warning("Rejected an Alice request from an unknown identity")
+            logger.warning("stage=authorization status=rejected request=%s user=%s", request_ref, identity_ref)
             return _json_response(_alice_response("У этого аккаунта нет доступа к навыку.", end_session=True))
 
         request_key = ":".join(
@@ -93,26 +114,47 @@ def create_app(
         )
         cached = await runtime.store.get_cached_response(request_key)
         if cached is not None:
+            logger.info(
+                "stage=webhook status=cache_hit request=%s elapsed_ms=%.1f",
+                request_ref,
+                _elapsed_ms(started),
+            )
             return JSONResponse(cached)
 
-        response = await _handle_request(runtime, request, raw_identity)
+        response = await _handle_request(runtime, request, raw_identity, request_ref, identity_ref)
         response_dict = response.model_dump(exclude_none=True)
         await runtime.store.cache_response(request_key, response_dict)
+        logger.info(
+            "stage=webhook status=completed request=%s end_session=%s response_chars=%d elapsed_ms=%.1f",
+            request_ref,
+            response.response.end_session,
+            len(response.response.text),
+            _elapsed_ms(started),
+        )
         return JSONResponse(response_dict)
 
     return app
 
 
 async def _handle_request(
-    runtime: Runtime,
-    request: AliceWebhookRequest,
-    raw_identity: str,
+        runtime: Runtime,
+        request: AliceWebhookRequest,
+        raw_identity: str,
+        request_ref: str,
+        identity_ref: str,
 ) -> AliceWebhookResponse:
     command = normalize_command(request.request.command or request.request.original_utterance)
     intent = detect_command_intent(command)
     identity_hash = hashlib.sha256(raw_identity.encode("utf-8")).hexdigest()
     generation = await runtime.store.get_generation(identity_hash)
     conversation_id = f"openalice:yandex-user:{identity_hash}:v{generation}"
+    logger.info(
+        "stage=command status=classified request=%s user=%s intent=%s generation=%d",
+        request_ref,
+        identity_ref,
+        intent.value if intent is not None else "message",
+        generation,
+    )
 
     if request.session.new and not command:
         return _alice_response(
@@ -138,8 +180,11 @@ async def _handle_request(
 
     existing = await runtime.store.get_job(conversation_id)
     if existing and existing["status"] == "pending":
+        logger.info("stage=openclaw status=already_pending request=%s user=%s", request_ref, identity_ref)
         return _alice_response("Предыдущий запрос ещё выполняется. Скажите «готово» немного позже или «отмена».")
 
+    logger.info("stage=openclaw status=started request=%s user=%s", request_ref, identity_ref)
+    openclaw_started = time.perf_counter()
     task = asyncio.create_task(runtime.openclaw.ask(command, conversation_id))
     runtime.pending_tasks[conversation_id] = task
     done, _ = await asyncio.wait({task}, timeout=runtime.settings.alice_fast_timeout_seconds)
@@ -148,32 +193,70 @@ async def _handle_request(
         try:
             answer = task.result()
         except (OpenClawError, asyncio.CancelledError):
-            logger.exception("OpenClaw failed to answer an Alice request")
+            logger.exception(
+                "stage=openclaw status=failed request=%s user=%s elapsed_ms=%.1f",
+                request_ref,
+                identity_ref,
+                _elapsed_ms(openclaw_started),
+            )
             return _alice_response("Домашний помощник сейчас недоступен. Попробуйте ещё раз позже.")
         await runtime.store.delete_job(conversation_id)
+        logger.info(
+            "stage=openclaw status=completed request=%s user=%s answer_chars=%d elapsed_ms=%.1f",
+            request_ref,
+            identity_ref,
+            len(answer),
+            _elapsed_ms(openclaw_started),
+        )
         return _alice_response(shorten_for_alice(answer, runtime.settings.alice_max_response_chars))
 
     await runtime.store.set_job(conversation_id, "pending")
+    logger.info(
+        "stage=openclaw status=deferred request=%s user=%s elapsed_ms=%.1f",
+        request_ref,
+        identity_ref,
+        _elapsed_ms(openclaw_started),
+    )
     task.add_done_callback(
-        lambda completed: asyncio.create_task(_save_deferred_result(runtime, conversation_id, completed))
+        lambda completed: asyncio.create_task(
+            _save_deferred_result(runtime, conversation_id, completed, request_ref, identity_ref, openclaw_started)
+        )
     )
     return _alice_response("Мне нужно немного времени. Скажите «готово» через несколько секунд.")
 
 
 async def _save_deferred_result(
-    runtime: Runtime,
-    conversation_id: str,
-    task: asyncio.Task[str],
+        runtime: Runtime,
+        conversation_id: str,
+        task: asyncio.Task[str],
+        request_ref: str,
+        identity_ref: str,
+        started: float,
 ) -> None:
     runtime.pending_tasks.pop(conversation_id, None)
     try:
         answer = task.result()
     except asyncio.CancelledError:
+        logger.info("stage=openclaw status=cancelled request=%s user=%s", request_ref, identity_ref)
         await runtime.store.set_job(conversation_id, "failed", error="Запрос был отменён.")
     except Exception as exc:
-        logger.warning("Deferred OpenClaw request failed: %s", type(exc).__name__)
+        logger.warning(
+            "stage=openclaw status=deferred_failed request=%s user=%s error_type=%s error_detail=%s elapsed_ms=%.1f",
+            request_ref,
+            identity_ref,
+            type(exc).__name__,
+            str(exc),
+            _elapsed_ms(started),
+        )
         await runtime.store.set_job(conversation_id, "failed", error="Домашний помощник не смог подготовить ответ.")
     else:
+        logger.info(
+            "stage=openclaw status=deferred_completed request=%s user=%s answer_chars=%d elapsed_ms=%.1f",
+            request_ref,
+            identity_ref,
+            len(answer),
+            _elapsed_ms(started),
+        )
         await runtime.store.set_job(conversation_id, "done", response=answer)
 
 
@@ -205,6 +288,19 @@ def _raw_identity(request: AliceWebhookRequest) -> str:
     if request.session.user is not None:
         return request.session.user.user_id
     return request.session.application.application_id
+
+
+def _identity_ref(raw_identity: str) -> str:
+    return hashlib.sha256(raw_identity.encode("utf-8")).hexdigest()[:12]
+
+
+def _request_ref(request: AliceWebhookRequest) -> str:
+    value = f"{request.session.session_id}:{request.session.message_id}"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _elapsed_ms(started: float) -> float:
+    return (time.perf_counter() - started) * 1000
 
 
 def _alice_response(text: str, end_session: bool = False) -> AliceWebhookResponse:

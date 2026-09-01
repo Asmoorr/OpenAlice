@@ -1,6 +1,11 @@
+import asyncio
+import logging
+import time
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger("openalice.openclaw")
 
 
 class OpenClawError(RuntimeError):
@@ -20,6 +25,7 @@ class OpenClawClient:
         await self._client.aclose()
 
     async def ask(self, message: str, user: str) -> str:
+        started = time.perf_counter()
         payload = {
             "model": self._agent,
             "input": message,
@@ -29,11 +35,51 @@ class OpenClawClient:
                 "Сначала дай краткий полезный ответ, желательно до 800 символов."
             ),
         }
-        try:
-            response = await self._client.post("/v1/responses", json=payload)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise OpenClawError(f"OpenClaw request failed: {exc}") from exc
+        response: httpx.Response | None = None
+        for attempt in range(3):
+            logger.info(
+                "stage=gateway status=requesting attempt=%d model=%s input_chars=%d",
+                attempt + 1,
+                self._agent,
+                len(message),
+            )
+            try:
+                response = await self._client.post("/v1/responses", json=payload)
+                response.raise_for_status()
+                logger.info(
+                    "stage=gateway status=response attempt=%d http_status=%d elapsed_ms=%.1f",
+                    attempt + 1,
+                    response.status_code,
+                    (time.perf_counter() - started) * 1000,
+                )
+                break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status in {502, 503, 504} and attempt < 2:
+                    logger.warning(
+                        "stage=gateway status=retrying attempt=%d http_status=%d",
+                        attempt + 1,
+                        status,
+                    )
+                    await asyncio.sleep(0.35 * (2**attempt))
+                    continue
+                detail = _response_error_detail(exc.response)
+                raise OpenClawError(
+                    f"OpenClaw request failed with HTTP {status}: {detail}"
+                ) from exc
+            except httpx.RequestError as exc:
+                if attempt < 2:
+                    logger.warning(
+                        "stage=gateway status=retrying attempt=%d error=%s",
+                        attempt + 1,
+                        type(exc).__name__,
+                    )
+                    await asyncio.sleep(0.35 * (2**attempt))
+                    continue
+                raise OpenClawError(f"OpenClaw request failed: {exc}") from exc
+
+        if response is None:  # pragma: no cover - defensive guard
+            raise OpenClawError("OpenClaw request failed without a response")
 
         try:
             data = response.json()
@@ -70,3 +116,8 @@ def _extract_output_text(data: Any) -> str:
                     chunks.append(text.strip())
     return "\n".join(chunks)
 
+
+def _response_error_detail(response: httpx.Response) -> str:
+    """Return a bounded gateway error without leaking response headers or tokens."""
+    body = response.text.strip().replace("\r", " ").replace("\n", " ")
+    return body[:500] if body else "empty response body"

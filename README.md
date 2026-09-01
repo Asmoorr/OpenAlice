@@ -372,11 +372,18 @@ ngrok config add-authtoken "<ТОКЕН_ИЗ_NGROK_DASHBOARD>"
 ngrok http 8765 --url https://example-name.ngrok-free.app
 ```
 
-Проверьте публичный endpoint:
+Проверьте публичный endpoint программным запросом:
 
-```text
-https://example-name.ngrok-free.app/health
+```powershell
+Invoke-RestMethod `
+  -Uri "https://example-name.ngrok-free.app/health" `
+  -Headers @{ "ngrok-skip-browser-warning" = "1" }
 ```
+
+При обычном открытии бесплатного домена в браузере ngrok может показать
+`ERR_NGROK_6024`. Это защитная страница для HTML-трафика, а не ошибка туннеля.
+API и webhook-запросы Яндекс Диалогов отправляются программно и не должны от неё
+зависеть. Заголовок выше нужен именно для ручной проверки `GET /health`.
 
 ngrok завершает публичный HTTPS и пересылает обычный HTTP на loopback ноутбука.
 Собственный сертификат для FastAPI не нужен.
@@ -538,7 +545,9 @@ ngrok service uninstall
 ```powershell
 openclaw gateway status --json
 Invoke-RestMethod http://127.0.0.1:8765/health
-Invoke-RestMethod https://example-name.ngrok-free.app/health
+Invoke-RestMethod `
+  -Uri "https://example-name.ngrok-free.app/health" `
+  -Headers @{ "ngrok-skip-browser-warning" = "1" }
 ```
 
 Затем отправьте реплику во вкладке тестирования Яндекс Диалогов и запустите навык
