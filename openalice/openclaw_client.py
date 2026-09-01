@@ -7,6 +7,9 @@ import httpx
 
 logger = logging.getLogger("openalice.openclaw")
 
+_MAX_ATTEMPTS = 8
+_RETRYABLE_STATUSES = {502, 503, 504}
+
 
 class OpenClawError(RuntimeError):
     pass
@@ -36,7 +39,7 @@ class OpenClawClient:
             ),
         }
         response: httpx.Response | None = None
-        for attempt in range(3):
+        for attempt in range(_MAX_ATTEMPTS):
             logger.info(
                 "stage=gateway status=requesting attempt=%d model=%s input_chars=%d",
                 attempt + 1,
@@ -55,26 +58,30 @@ class OpenClawClient:
                 break
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
-                if status in {502, 503, 504} and attempt < 2:
+                if status in _RETRYABLE_STATUSES and attempt < _MAX_ATTEMPTS - 1:
+                    retry_delay = min(0.5 * (2**attempt), 8.0)
                     logger.warning(
-                        "stage=gateway status=retrying attempt=%d http_status=%d",
+                        "stage=gateway status=retrying attempt=%d http_status=%d delay_seconds=%.1f",
                         attempt + 1,
                         status,
+                        retry_delay,
                     )
-                    await asyncio.sleep(0.35 * (2**attempt))
+                    await asyncio.sleep(retry_delay)
                     continue
                 detail = _response_error_detail(exc.response)
                 raise OpenClawError(
                     f"OpenClaw request failed with HTTP {status}: {detail}"
                 ) from exc
             except httpx.RequestError as exc:
-                if attempt < 2:
+                if attempt < _MAX_ATTEMPTS - 1:
+                    retry_delay = min(0.5 * (2**attempt), 8.0)
                     logger.warning(
-                        "stage=gateway status=retrying attempt=%d error=%s",
+                        "stage=gateway status=retrying attempt=%d error=%s delay_seconds=%.1f",
                         attempt + 1,
                         type(exc).__name__,
+                        retry_delay,
                     )
-                    await asyncio.sleep(0.35 * (2**attempt))
+                    await asyncio.sleep(retry_delay)
                     continue
                 raise OpenClawError(f"OpenClaw request failed: {exc}") from exc
 
