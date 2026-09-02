@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
@@ -13,6 +13,36 @@ _RETRYABLE_STATUSES = {502, 503, 504}
 
 class OpenClawError(RuntimeError):
     pass
+
+
+class AssistantClient(Protocol):
+    async def ask(self, message: str, user: str) -> str: ...
+
+    async def close(self) -> None: ...
+
+
+class FakeOpenClawClient:
+    """Local, side-effect-free replacement used for moderation and tests."""
+
+    def __init__(self, response: str, delay_seconds: float = 0.0) -> None:
+        self._response = response
+        self._delay_seconds = delay_seconds
+
+    async def close(self) -> None:
+        return None
+
+    async def ask(self, message: str, user: str) -> str:
+        logger.info(
+            "stage=fake_gateway status=requesting input_chars=%d delay_seconds=%.1f",
+            len(message),
+            self._delay_seconds,
+        )
+        if self._delay_seconds:
+            await asyncio.sleep(self._delay_seconds)
+        logger.info(
+            "stage=fake_gateway status=response answer_chars=%d", len(self._response)
+        )
+        return self._response
 
 
 class OpenClawClient:

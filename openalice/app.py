@@ -13,7 +13,12 @@ from fastapi.responses import JSONResponse
 from openalice.alice_models import AliceWebhookRequest, AliceWebhookResponse, AliceResponseBody
 from openalice.commands import CommandIntent, detect_command_intent, normalize_command
 from openalice.config import Settings, get_settings
-from openalice.openclaw_client import OpenClawClient, OpenClawError
+from openalice.openclaw_client import (
+    AssistantClient,
+    FakeOpenClawClient,
+    OpenClawClient,
+    OpenClawError,
+)
 from openalice.store import Store
 from openalice.text import shorten_for_alice
 
@@ -24,13 +29,13 @@ logger = logging.getLogger("openalice")
 class Runtime:
     settings: Settings
     store: Store
-    openclaw: OpenClawClient
+    openclaw: AssistantClient
     pending_tasks: dict[str, asyncio.Task[str]] = field(default_factory=dict)
 
 
 def create_app(
         settings: Settings | None = None,
-        openclaw_client: OpenClawClient | None = None,
+        openclaw_client: AssistantClient | None = None,
 ) -> FastAPI:
     resolved = settings or get_settings()
     logging.basicConfig(
@@ -40,19 +45,15 @@ def create_app(
     runtime = Runtime(
         settings=resolved,
         store=Store(resolved.database_path),
-        openclaw=openclaw_client
-                 or OpenClawClient(
-            resolved.openclaw_base_url,
-            resolved.openclaw_gateway_token,
-            resolved.openclaw_agent,
-        ),
+        openclaw=openclaw_client or _create_assistant_client(resolved),
     )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.info(
-            "stage=startup status=starting database=%s openclaw=%s agent=%s",
+            "stage=startup status=starting database=%s mode=%s openclaw=%s agent=%s",
             resolved.database_path,
+            "fake" if resolved.openalice_fake_mode else "live",
             resolved.openclaw_base_url,
             resolved.openclaw_agent,
         )
@@ -79,7 +80,11 @@ def create_app(
 
     @app.get("/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok", "service": "openalice"}
+        return {
+            "status": "ok",
+            "service": "openalice",
+            "mode": "fake" if runtime.settings.openalice_fake_mode else "live",
+        }
 
     @app.post("/alice/webhook/{secret}")
     async def alice_webhook(
@@ -134,6 +139,19 @@ def create_app(
         return JSONResponse(response_dict)
 
     return app
+
+
+def _create_assistant_client(settings: Settings) -> AssistantClient:
+    if settings.openalice_fake_mode:
+        return FakeOpenClawClient(
+            settings.openalice_fake_response,
+            settings.openalice_fake_delay_seconds,
+        )
+    return OpenClawClient(
+        settings.openclaw_base_url,
+        settings.openclaw_gateway_token,
+        settings.openclaw_agent,
+    )
 
 
 async def _handle_request(

@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     openclaw_base_url: str = "http://127.0.0.1:18789"
     openclaw_gateway_token: str = Field(min_length=1)
     openclaw_agent: str = "openclaw/default"
+    openalice_fake_mode: bool = False
+    openalice_fake_response: str = Field(
+        default="Тестовый режим работает. Запрос обработан без обращения к домашнему помощнику.",
+        min_length=1,
+    )
+    openalice_fake_delay_seconds: float = Field(default=0.0, ge=0, le=120)
     alice_webhook_secret: str = Field(min_length=16)
     alice_allowed_user_ids: frozenset[str] = frozenset()
     alice_fast_timeout_seconds: float = Field(default=3.8, gt=0.1, lt=4.4)

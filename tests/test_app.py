@@ -1,4 +1,5 @@
 import asyncio
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -59,6 +60,53 @@ def test_health(tmp_path: Path) -> None:
         response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert response.json()["mode"] == "live"
+
+
+def test_fake_mode_uses_local_response_without_injected_gateway(tmp_path: Path) -> None:
+    app = create_app(
+        settings(
+            tmp_path / "test.db",
+            openalice_fake_mode=True,
+            openalice_fake_response="Безопасный тестовый ответ",
+        )
+    )
+
+    with TestClient(app) as client:
+        health = client.get("/health")
+        response = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("Включи устройство"),
+        )
+
+    assert health.json()["mode"] == "fake"
+    assert response.json()["response"]["text"] == "Безопасный тестовый ответ"
+
+
+def test_fake_mode_can_simulate_deferred_response(tmp_path: Path) -> None:
+    app = create_app(
+        settings(
+            tmp_path / "test.db",
+            openalice_fake_mode=True,
+            openalice_fake_response="Отложенный тестовый ответ",
+            openalice_fake_delay_seconds=0.2,
+            alice_fast_timeout_seconds=0.11,
+        )
+    )
+
+    with TestClient(app) as client:
+        pending = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("Долгая тестовая команда"),
+        )
+        time.sleep(0.25)
+        result = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("готово", message_id=2),
+        )
+
+    assert "нужно немного времени" in pending.json()["response"]["text"]
+    assert result.json()["response"]["text"] == "Отложенный тестовый ответ"
 
 
 def test_fast_openclaw_response_and_deduplication(tmp_path: Path) -> None:
@@ -83,8 +131,6 @@ def test_deferred_response(tmp_path: Path) -> None:
     with TestClient(app) as client:
         pending = client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("Долгий вопрос"))
         assert "нужно немного времени" in pending.json()["response"]["text"]
-        import time
-
         time.sleep(0.35)
         result = client.post(
             "/alice/webhook/a-very-long-test-secret",

@@ -210,6 +210,9 @@ Invoke-RestMethod http://127.0.0.1:8765/health
 OPENCLAW_BASE_URL=http://127.0.0.1:18789
 OPENCLAW_GATEWAY_TOKEN=replace-with-a-long-random-token
 OPENCLAW_AGENT=openclaw/default
+OPENALICE_FAKE_MODE=false
+OPENALICE_FAKE_RESPONSE=Тестовый режим работает. Запрос обработан без обращения к домашнему помощнику.
+OPENALICE_FAKE_DELAY_SECONDS=0
 ALICE_WEBHOOK_SECRET=replace-with-a-different-random-token
 ALICE_ALLOWED_USER_IDS=
 ALICE_FAST_TIMEOUT_SECONDS=3.8
@@ -224,6 +227,9 @@ LOG_LEVEL=INFO
 OPENCLAW_BASE_URL=http://127.0.0.1:18789
 OPENCLAW_GATEWAY_TOKEN=J7rKxY9_example_gateway_token_do_not_copy_Q2m
 OPENCLAW_AGENT=openclaw/default
+OPENALICE_FAKE_MODE=false
+OPENALICE_FAKE_RESPONSE=Тестовый режим работает. Запрос обработан без обращения к домашнему помощнику.
+OPENALICE_FAKE_DELAY_SECONDS=0
 ALICE_WEBHOOK_SECRET=6mN_example_alice_webhook_secret_do_not_copy_p8V
 ALICE_ALLOWED_USER_IDS=879A1EXAMPLEUSERID,51B2EXAMPLEFAMILYID
 ALICE_FAST_TIMEOUT_SECONDS=3.8
@@ -246,6 +252,14 @@ LOG_LEVEL=INFO
   `openclaw gateway restart` и снова `openclaw gateway auth-token --show`.
 - `OPENCLAW_AGENT` — для основного агента оставьте `openclaw/default`. Другой
   агент задаётся как `openclaw/<agentId>`.
+- `OPENALICE_FAKE_MODE` — установите `true` для модерации или безопасных тестов.
+  В этом режиме HTTP-клиент OpenClaw не создаётся, поэтому запросы гарантированно
+  не доходят до Gateway и не могут запустить инструменты домашнего помощника.
+- `OPENALICE_FAKE_RESPONSE` — ответ на любую обычную реплику в тестовом режиме.
+  Служебные команды OpenAlice продолжают работать как обычно.
+- `OPENALICE_FAKE_DELAY_SECONDS` — искусственная задержка ответа. Значение `0`
+  имитирует быстрый ответ; значение больше `ALICE_FAST_TIMEOUT_SECONDS` позволяет
+  проверить сценарий с командой «готово».
 - `ALICE_WEBHOOK_SECRET` — создайте самостоятельно командой из раздела выше.
   Это значение станет секретной частью URL, а не токеном Яндекса.
 - `ALICE_ALLOWED_USER_IDS` — сначала оставьте пустым. В тестировании навыка
@@ -258,6 +272,11 @@ LOG_LEVEL=INFO
 - `DATABASE_PATH` — локальная SQLite-база; `./openalice.db` подходит для одного
   ноутбука.
 - `LOG_LEVEL` — `INFO` для обычной работы, `DEBUG` только при диагностике.
+
+Перед отправкой навыка на модерацию установите `OPENALICE_FAKE_MODE=true`,
+перезапустите OpenAlice и проверьте `/health`: поле `mode` должно быть равно
+`fake`. Для возврата к домашнему помощнику установите значение `false` и снова
+перезапустите приложение.
 
 Токен ngrok в `.env` OpenAlice не добавляется. Он хранится в конфигурации самой
 службы ngrok и берётся на странице
