@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,18 @@ class Settings(BaseSettings):
         ),
         min_length=1,
     )
+    notifications_enabled: bool = False
+    home_assistant_url: str = "http://127.0.0.1:8123"
+    home_assistant_token: str = ""
+    home_assistant_entity_id: str = ""
+    home_assistant_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    notification_ready_phrase: str = Field(
+        default="Ответ готов. Скажите «готово», чтобы его услышать.",
+        min_length=1,
+        max_length=100,
+    )
+    notification_max_attempts: int = Field(default=3, ge=1, le=10)
+    notification_poll_seconds: float = Field(default=5.0, ge=0.1, le=60)
     database_path: Path = Path("./openalice.db")
     log_level: str = "INFO"
 
@@ -57,6 +69,20 @@ class Settings(BaseSettings):
     @classmethod
     def strip_base_url(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @field_validator("home_assistant_url")
+    @classmethod
+    def strip_home_assistant_url(cls, value: str) -> str:
+        return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_notifications(self) -> "Settings":
+        if self.notifications_enabled:
+            if not self.home_assistant_token:
+                raise ValueError("HOME_ASSISTANT_TOKEN is required when notifications are enabled")
+            if not self.home_assistant_entity_id:
+                raise ValueError("HOME_ASSISTANT_ENTITY_ID is required when notifications are enabled")
+        return self
 
 
 @lru_cache

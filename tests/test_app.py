@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from openalice.app import create_app
 from openalice.config import Settings
+from openalice.notifications.models import Notification
 
 
 DEFAULT_PENDING_PHRASES = {
@@ -25,6 +26,17 @@ class FakeOpenClaw:
         if self.delay:
             await asyncio.sleep(self.delay)
         return self.answer
+
+    async def close(self) -> None:
+        return None
+
+
+class FakeNotifier:
+    def __init__(self) -> None:
+        self.notifications: list[Notification] = []
+
+    async def notify(self, notification: Notification) -> None:
+        self.notifications.append(notification)
 
     async def close(self) -> None:
         return None
@@ -169,6 +181,40 @@ def test_deferred_response_uses_configured_pending_phrase(tmp_path: Path) -> Non
 
     assert pending.json()["response"]["text"] == "Пожалуйста, подождите и скажите «готово»."
     assert still_pending.json()["response"]["text"] == "Пожалуйста, подождите и скажите «готово»."
+
+
+def test_deferred_response_announces_when_ready(tmp_path: Path) -> None:
+    fake_openclaw = FakeOpenClaw(answer="Отложенный ответ", delay=0.2)
+    fake_notifier = FakeNotifier()
+    app = create_app(
+        settings(
+            tmp_path / "test.db",
+            alice_fast_timeout_seconds=0.11,
+            notifications_enabled=True,
+            home_assistant_token="home-assistant-token",
+            home_assistant_entity_id="media_player.yandex_station_mini",
+            notification_ready_phrase="Ответ подготовлен.",
+            notification_poll_seconds=0.1,
+        ),
+        fake_openclaw,
+        fake_notifier,
+    )
+
+    with TestClient(app) as client:
+        client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("Долгий вопрос"),
+        )
+        time.sleep(0.25)
+        result = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("готово", message_id=2),
+        )
+
+    assert len(fake_notifier.notifications) == 1
+    assert fake_notifier.notifications[0].target == "media_player.yandex_station_mini"
+    assert fake_notifier.notifications[0].text == "Ответ подготовлен."
+    assert result.json()["response"]["text"] == "Отложенный ответ"
 
 
 def test_allowlist_and_wrong_secret(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -20,6 +21,12 @@ from openalice.openclaw_client import (
     OpenClawClient,
     OpenClawError,
 )
+from openalice.notifications import (
+    HomeAssistantNotifier,
+    Notification,
+    Notifier,
+)
+from openalice.notifications.worker import NotificationWorker
 from openalice.pending_phrases import PendingPhraseProvider
 from openalice.store import Store
 from openalice.text import shorten_for_alice
@@ -33,23 +40,37 @@ class Runtime:
     store: Store
     openclaw: AssistantClient
     pending_phrases: PendingPhraseProvider
+    notification_worker: NotificationWorker | None
     pending_tasks: dict[str, asyncio.Task[str]] = field(default_factory=dict)
 
 
 def create_app(
         settings: Settings | None = None,
         openclaw_client: AssistantClient | None = None,
+        notifier: Notifier | None = None,
 ) -> FastAPI:
     resolved = settings or get_settings()
     logging.basicConfig(
         level=getattr(logging, resolved.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    store = Store(resolved.database_path)
+    resolved_notifier = notifier or _create_notifier(resolved)
     runtime = Runtime(
         settings=resolved,
-        store=Store(resolved.database_path),
+        store=store,
         openclaw=openclaw_client or _create_assistant_client(resolved),
         pending_phrases=PendingPhraseProvider(resolved.alice_pending_phrases),
+        notification_worker=(
+            NotificationWorker(
+                store,
+                resolved_notifier,
+                resolved.notification_max_attempts,
+                resolved.notification_poll_seconds,
+            )
+            if resolved_notifier is not None
+            else None
+        ),
     )
 
     @asynccontextmanager
@@ -63,6 +84,8 @@ def create_app(
             resolved.openclaw_agent,
         )
         await runtime.store.initialize()
+        if runtime.notification_worker is not None:
+            runtime.notification_worker.start()
         logger.info(LogType.TECH, "stage=startup status=ready")
         yield
         logger.info(LogType.TECH, "stage=shutdown status=starting pending_tasks=%d", len(runtime.pending_tasks))
@@ -70,6 +93,8 @@ def create_app(
             task.cancel()
         if runtime.pending_tasks:
             await asyncio.gather(*runtime.pending_tasks.values(), return_exceptions=True)
+        if runtime.notification_worker is not None:
+            await runtime.notification_worker.stop()
         await runtime.openclaw.close()
         logger.info(LogType.TECH, "stage=shutdown status=complete")
 
@@ -160,6 +185,16 @@ def _create_assistant_client(settings: Settings) -> AssistantClient:
         settings.openclaw_base_url,
         settings.openclaw_gateway_token,
         settings.openclaw_agent,
+    )
+
+
+def _create_notifier(settings: Settings) -> Notifier | None:
+    if not settings.notifications_enabled:
+        return None
+    return HomeAssistantNotifier(
+        settings.home_assistant_url,
+        settings.home_assistant_token,
+        settings.home_assistant_timeout_seconds,
     )
 
 
@@ -301,7 +336,24 @@ async def _save_deferred_result(
             _elapsed_ms(started),
         )
         logger.info(LogType.USER, "event=deferred_answer_ready request=%s user=%s", request_ref, identity_ref)
-        await runtime.store.set_job(conversation_id, "done", response=answer)
+        if runtime.settings.notifications_enabled:
+            notification = Notification(
+                event_id=uuid.uuid4().hex,
+                conversation_id=conversation_id,
+                kind="answer_ready",
+                channel="home_assistant",
+                target=runtime.settings.home_assistant_entity_id,
+                text=runtime.settings.notification_ready_phrase,
+            )
+            await runtime.store.complete_job_and_enqueue_notification(
+                conversation_id,
+                answer,
+                notification,
+            )
+            if runtime.notification_worker is not None:
+                runtime.notification_worker.wake()
+        else:
+            await runtime.store.set_job(conversation_id, "done", response=answer)
 
 
 async def _get_deferred_result(runtime: Runtime, conversation_id: str) -> AliceWebhookResponse:

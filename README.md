@@ -218,6 +218,14 @@ ALICE_ALLOWED_USER_IDS=
 ALICE_FAST_TIMEOUT_SECONDS=3.8
 ALICE_MAX_RESPONSE_CHARS=900
 ALICE_PENDING_PHRASES=Мне нужно немного времени. Скажите «готово» через несколько секунд.|Ответ ещё готовится. Скажите «готово» немного позже.
+NOTIFICATIONS_ENABLED=false
+HOME_ASSISTANT_URL=http://127.0.0.1:8123
+HOME_ASSISTANT_TOKEN=replace-with-home-assistant-token
+HOME_ASSISTANT_ENTITY_ID=media_player.yandex_station_mini
+HOME_ASSISTANT_TIMEOUT_SECONDS=3
+NOTIFICATION_READY_PHRASE=Ответ готов. Скажите «готово», чтобы его услышать.
+NOTIFICATION_MAX_ATTEMPTS=3
+NOTIFICATION_POLL_SECONDS=5
 DATABASE_PATH=./openalice.db
 LOG_LEVEL=INFO
 ```
@@ -274,6 +282,13 @@ LOG_LEVEL=INFO
 - `ALICE_PENDING_PHRASES` — варианты ответа, пока результат не готов. Фразы
   разделяются символом `|`; чтобы добавить или удалить вариант, отредактируйте
   эту строку и перезапустите OpenAlice. Должна остаться хотя бы одна фраза.
+- `NOTIFICATIONS_ENABLED` — включает фоновое уведомление о готовности через
+  Home Assistant. При `false` приложение не обращается к Home Assistant.
+- `HOME_ASSISTANT_URL`, `HOME_ASSISTANT_TOKEN` и `HOME_ASSISTANT_ENTITY_ID` —
+  адрес API, долгоживущий токен и `entity_id` нужной Яндекс Станции.
+- `NOTIFICATION_READY_PHRASE` — короткая фраза, которую произнесёт Станция.
+- `NOTIFICATION_MAX_ATTEMPTS` и `NOTIFICATION_POLL_SECONDS` — количество попыток
+  доставки и период проверки сохранённой очереди.
 - `DATABASE_PATH` — локальная SQLite-база; `./openalice.db` подходит для одного
   ноутбука.
 - `LOG_LEVEL` — `INFO` для обычной работы, `DEBUG` только при диагностике.
@@ -282,6 +297,24 @@ LOG_LEVEL=INFO
 перезапустите OpenAlice и проверьте `/health`: поле `mode` должно быть равно
 `fake`. Для возврата к домашнему помощнику установите значение `false` и снова
 перезапустите приложение.
+
+### Уведомление через Яндекс Станцию
+
+Автоматическое уведомление работает через REST API Home Assistant и компонент
+[AlexxIT/YandexStation](https://github.com/AlexxIT/YandexStation). Установите
+компонент через HACS, добавьте Станцию в Home Assistant и убедитесь, что у неё
+есть сущность вида `media_player.yandex_station_mini`.
+
+Создайте в профиле Home Assistant долгоживущий токен доступа, запишите его в
+`HOME_ASSISTANT_TOKEN`, укажите сущность колонки в `HOME_ASSISTANT_ENTITY_ID` и
+установите `NOTIFICATIONS_ENABLED=true`. Токен нельзя публиковать или добавлять
+в Git.
+
+Когда отложенный ответ готов, OpenAlice атомарно сохраняет ответ и уведомление в
+SQLite. Фоновый worker отправляет короткую TTS-фразу через
+`media_player.play_media`. Если Home Assistant недоступен, доставка повторяется,
+но сам результат остаётся доступен по команде «готово». При получении или отмене
+результата ещё не отправленное уведомление отменяется.
 
 Токен ngrok в `.env` OpenAlice не добавляется. Он хранится в конфигурации самой
 службы ngrok и берётся на странице
