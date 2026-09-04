@@ -8,6 +8,12 @@ from openalice.app import create_app
 from openalice.config import Settings
 
 
+DEFAULT_PENDING_PHRASES = {
+    "Мне нужно немного времени. Скажите «готово» через несколько секунд.",
+    "Ответ ещё готовится. Скажите «готово» немного позже.",
+}
+
+
 class FakeOpenClaw:
     def __init__(self, answer: str = "Готовый ответ", delay: float = 0) -> None:
         self.answer = answer
@@ -105,7 +111,7 @@ def test_fake_mode_can_simulate_deferred_response(tmp_path: Path) -> None:
             json=alice_request("готово", message_id=2),
         )
 
-    assert "нужно немного времени" in pending.json()["response"]["text"]
+    assert pending.json()["response"]["text"] in DEFAULT_PENDING_PHRASES
     assert result.json()["response"]["text"] == "Отложенный тестовый ответ"
 
 
@@ -130,7 +136,7 @@ def test_deferred_response(tmp_path: Path) -> None:
     )
     with TestClient(app) as client:
         pending = client.post("/alice/webhook/a-very-long-test-secret", json=alice_request("Долгий вопрос"))
-        assert "нужно немного времени" in pending.json()["response"]["text"]
+        assert pending.json()["response"]["text"] in DEFAULT_PENDING_PHRASES
         time.sleep(0.35)
         result = client.post(
             "/alice/webhook/a-very-long-test-secret",
@@ -138,6 +144,31 @@ def test_deferred_response(tmp_path: Path) -> None:
         )
 
     assert result.json()["response"]["text"] == "Отложенный ответ"
+
+
+def test_deferred_response_uses_configured_pending_phrase(tmp_path: Path) -> None:
+    fake = FakeOpenClaw(answer="Отложенный ответ", delay=0.3)
+    app = create_app(
+        settings(
+            tmp_path / "test.db",
+            alice_fast_timeout_seconds=0.11,
+            alice_pending_phrases="Пожалуйста, подождите и скажите «готово».",
+        ),
+        fake,
+    )
+
+    with TestClient(app) as client:
+        pending = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("Долгий вопрос"),
+        )
+        still_pending = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("готово", message_id=2),
+        )
+
+    assert pending.json()["response"]["text"] == "Пожалуйста, подождите и скажите «готово»."
+    assert still_pending.json()["response"]["text"] == "Пожалуйста, подождите и скажите «готово»."
 
 
 def test_allowlist_and_wrong_secret(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ from openalice.openclaw_client import (
     OpenClawClient,
     OpenClawError,
 )
+from openalice.pending_phrases import PendingPhraseProvider
 from openalice.store import Store
 from openalice.text import shorten_for_alice
 
@@ -31,6 +32,7 @@ class Runtime:
     settings: Settings
     store: Store
     openclaw: AssistantClient
+    pending_phrases: PendingPhraseProvider
     pending_tasks: dict[str, asyncio.Task[str]] = field(default_factory=dict)
 
 
@@ -47,6 +49,7 @@ def create_app(
         settings=resolved,
         store=Store(resolved.database_path),
         openclaw=openclaw_client or _create_assistant_client(resolved),
+        pending_phrases=PendingPhraseProvider(resolved.alice_pending_phrases),
     )
 
     @asynccontextmanager
@@ -213,7 +216,7 @@ async def _handle_request(
     if existing and existing["status"] == "pending":
         logger.info(LogType.TECH, "stage=openclaw status=already_pending request=%s user=%s", request_ref, identity_ref)
         logger.info(LogType.USER, "event=question_rejected reason=request_pending request=%s user=%s", request_ref, identity_ref)
-        return _alice_response("Предыдущий запрос ещё выполняется. Скажите «готово» немного позже или «отмена».")
+        return _alice_response(runtime.pending_phrases.choose())
 
     logger.info(LogType.TECH, "stage=openclaw status=started request=%s user=%s", request_ref, identity_ref)
     logger.info(LogType.USER, "event=question_accepted request=%s user=%s", request_ref, identity_ref)
@@ -260,7 +263,7 @@ async def _handle_request(
             _save_deferred_result(runtime, conversation_id, completed, request_ref, identity_ref, openclaw_started)
         )
     )
-    return _alice_response("Мне нужно немного времени. Скажите «готово» через несколько секунд.")
+    return _alice_response(runtime.pending_phrases.choose())
 
 
 async def _save_deferred_result(
@@ -306,7 +309,7 @@ async def _get_deferred_result(runtime: Runtime, conversation_id: str) -> AliceW
     if job is None:
         return _alice_response("Нет ожидающего ответа. Задайте новый вопрос.")
     if job["status"] == "pending":
-        return _alice_response("Ответ ещё готовится. Скажите «готово» немного позже.")
+        return _alice_response(runtime.pending_phrases.choose())
     if job["status"] == "failed":
         await runtime.store.delete_job(conversation_id)
         return _alice_response(job["error"] or "Не удалось подготовить ответ. Попробуйте ещё раз.")

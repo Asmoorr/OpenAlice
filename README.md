@@ -217,6 +217,7 @@ ALICE_WEBHOOK_SECRET=replace-with-a-different-random-token
 ALICE_ALLOWED_USER_IDS=
 ALICE_FAST_TIMEOUT_SECONDS=3.8
 ALICE_MAX_RESPONSE_CHARS=900
+ALICE_PENDING_PHRASES=Мне нужно немного времени. Скажите «готово» через несколько секунд.|Ответ ещё готовится. Скажите «готово» немного позже.
 DATABASE_PATH=./openalice.db
 LOG_LEVEL=INFO
 ```
@@ -234,6 +235,7 @@ ALICE_WEBHOOK_SECRET=6mN_example_alice_webhook_secret_do_not_copy_p8V
 ALICE_ALLOWED_USER_IDS=879A1EXAMPLEUSERID,51B2EXAMPLEFAMILYID
 ALICE_FAST_TIMEOUT_SECONDS=3.8
 ALICE_MAX_RESPONSE_CHARS=900
+ALICE_PENDING_PHRASES=Мне нужно немного времени. Скажите «готово» через несколько секунд.|Ответ ещё готовится. Скажите «готово» немного позже.
 DATABASE_PATH=./openalice.db
 LOG_LEVEL=INFO
 ```
@@ -269,6 +271,9 @@ LOG_LEVEL=INFO
   дедлайна Яндекс Диалогов около 4,5 секунды.
 - `ALICE_MAX_RESPONSE_CHARS` — рекомендуется `900`; абсолютный максимум Алисы
   равен 1024 символам.
+- `ALICE_PENDING_PHRASES` — варианты ответа, пока результат не готов. Фразы
+  разделяются символом `|`; чтобы добавить или удалить вариант, отредактируйте
+  эту строку и перезапустите OpenAlice. Должна остаться хотя бы одна фраза.
 - `DATABASE_PATH` — локальная SQLite-база; `./openalice.db` подходит для одного
   ноутбука.
 - `LOG_LEVEL` — `INFO` для обычной работы, `DEBUG` только при диагностике.

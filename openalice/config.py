@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     alice_allowed_user_ids: frozenset[str] = frozenset()
     alice_fast_timeout_seconds: float = Field(default=3.8, gt=0.1, lt=4.4)
     alice_max_response_chars: int = Field(default=900, ge=100, le=1024)
+    alice_pending_phrases: tuple[str, ...] = Field(
+        default=(
+            "Мне нужно немного времени. Скажите «готово» через несколько секунд.",
+            "Ответ ещё готовится. Скажите «готово» немного позже.",
+        ),
+        min_length=1,
+    )
     database_path: Path = Path("./openalice.db")
     log_level: str = "INFO"
 
@@ -37,6 +44,13 @@ class Settings(BaseSettings):
             return frozenset()
         if isinstance(value, str):
             return frozenset(item.strip() for item in value.split(",") if item.strip())
+        return value
+
+    @field_validator("alice_pending_phrases", mode="before")
+    @classmethod
+    def parse_pending_phrases(cls, value: object) -> object:
+        if isinstance(value, str):
+            return tuple(item.strip() for item in value.split("|") if item.strip())
         return value
 
     @field_validator("openclaw_base_url")
