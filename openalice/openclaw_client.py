@@ -1,11 +1,11 @@
 import asyncio
-import logging
 import time
 from typing import Any, Protocol
 
 import httpx
+from openalice.logging import LogType, get_logger
 
-logger = logging.getLogger("openalice.openclaw")
+logger = get_logger("openalice.openclaw")
 
 _MAX_ATTEMPTS = 8
 _RETRYABLE_STATUSES = {502, 503, 504}
@@ -33,6 +33,7 @@ class FakeOpenClawClient:
 
     async def ask(self, message: str, user: str) -> str:
         logger.info(
+            LogType.TECH,
             "stage=fake_gateway status=requesting input_chars=%d delay_seconds=%.1f",
             len(message),
             self._delay_seconds,
@@ -40,6 +41,7 @@ class FakeOpenClawClient:
         if self._delay_seconds:
             await asyncio.sleep(self._delay_seconds)
         logger.info(
+            LogType.TECH,
             "stage=fake_gateway status=response answer_chars=%d", len(self._response)
         )
         return self._response
@@ -71,6 +73,7 @@ class OpenClawClient:
         response: httpx.Response | None = None
         for attempt in range(_MAX_ATTEMPTS):
             logger.info(
+                LogType.TECH,
                 "stage=gateway status=requesting attempt=%d model=%s input_chars=%d",
                 attempt + 1,
                 self._agent,
@@ -80,6 +83,7 @@ class OpenClawClient:
                 response = await self._client.post("/v1/responses", json=payload)
                 response.raise_for_status()
                 logger.info(
+                    LogType.TECH,
                     "stage=gateway status=response attempt=%d http_status=%d elapsed_ms=%.1f",
                     attempt + 1,
                     response.status_code,
@@ -91,6 +95,7 @@ class OpenClawClient:
                 if status in _RETRYABLE_STATUSES and attempt < _MAX_ATTEMPTS - 1:
                     retry_delay = min(0.5 * (2**attempt), 8.0)
                     logger.warning(
+                        LogType.TECH,
                         "stage=gateway status=retrying attempt=%d http_status=%d delay_seconds=%.1f",
                         attempt + 1,
                         status,
@@ -106,6 +111,7 @@ class OpenClawClient:
                 if attempt < _MAX_ATTEMPTS - 1:
                     retry_delay = min(0.5 * (2**attempt), 8.0)
                     logger.warning(
+                        LogType.TECH,
                         "stage=gateway status=retrying attempt=%d error=%s delay_seconds=%.1f",
                         attempt + 1,
                         type(exc).__name__,
