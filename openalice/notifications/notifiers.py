@@ -2,6 +2,7 @@ from typing import Protocol
 
 import httpx
 
+from openalice.glagol import GlagolClient
 from openalice.notifications.models import Notification
 
 
@@ -47,3 +48,14 @@ class HomeAssistantNotifier:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+class GlagolNotifier:
+    def __init__(self, client: GlagolClient) -> None:
+        self._client = client
+
+    async def notify(self, notification: Notification) -> None:
+        await self._client.say(notification.target, notification.text)
+
+    async def close(self) -> None:
+        await self._client.close()

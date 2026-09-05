@@ -14,11 +14,13 @@ class NotificationWorker:
             notifier: Notifier,
             max_attempts: int,
             poll_seconds: float,
+            channel: str | None = None,
     ) -> None:
         self._store = store
         self._notifier = notifier
         self._max_attempts = max_attempts
         self._poll_seconds = poll_seconds
+        self._channel = channel
         self._wake_event = asyncio.Event()
         self._stopping = False
         self._task: asyncio.Task[None] | None = None
@@ -50,6 +52,8 @@ class NotificationWorker:
         for notification in await self._store.get_pending_notifications():
             if self._stopping:
                 return
+            if self._channel is not None and notification.channel != self._channel:
+                continue
             try:
                 await self._notifier.notify(notification)
             except Exception as exc:

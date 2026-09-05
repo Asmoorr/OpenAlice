@@ -1,6 +1,6 @@
 .env
 .pytest_cache/
-.test-tmp/
+.test-tmp*/
 .venv/
 __pycache__/
 *.py[cod]
@@ -8,5 +8,6 @@ __pycache__/
 *.db-shm
 *.db-wal
 logs/
+data/glagol_credentials*.json
 
 .idea

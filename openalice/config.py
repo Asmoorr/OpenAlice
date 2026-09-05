@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,10 +36,18 @@ class Settings(BaseSettings):
         min_length=1,
     )
     notifications_enabled: bool = False
+    notification_provider: Literal["home_assistant", "glagol"] = "home_assistant"
     home_assistant_url: str = "http://127.0.0.1:8123"
     home_assistant_token: str = ""
     home_assistant_entity_id: str = ""
     home_assistant_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    glagol_device_id: str = ""
+    glagol_platform: str = ""
+    glagol_host: str = ""
+    glagol_port: int = Field(default=1961, ge=1, le=65535)
+    glagol_credentials_path: Path = Path("./data/glagol_credentials.json")
+    glagol_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    glagol_discovery_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
     notification_ready_phrase: str = Field(
         default="Ответ готов. Скажите «готово», чтобы его услышать.",
         min_length=1,
@@ -78,11 +87,26 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_notifications(self) -> "Settings":
         if self.notifications_enabled:
-            if not self.home_assistant_token:
-                raise ValueError("HOME_ASSISTANT_TOKEN is required when notifications are enabled")
-            if not self.home_assistant_entity_id:
-                raise ValueError("HOME_ASSISTANT_ENTITY_ID is required when notifications are enabled")
+            if self.notification_provider == "home_assistant":
+                if not self.home_assistant_token:
+                    raise ValueError("HOME_ASSISTANT_TOKEN is required for Home Assistant notifications")
+                if not self.home_assistant_entity_id:
+                    raise ValueError("HOME_ASSISTANT_ENTITY_ID is required for Home Assistant notifications")
+            elif not self.glagol_device_id:
+                raise ValueError("GLAGOL_DEVICE_ID is required for Glagol notifications")
+            elif self.glagol_host and not self.glagol_platform:
+                raise ValueError("GLAGOL_PLATFORM is required when GLAGOL_HOST is set")
         return self
+
+    @property
+    def notification_channel(self) -> str:
+        return self.notification_provider
+
+    @property
+    def notification_target(self) -> str:
+        if self.notification_provider == "glagol":
+            return self.glagol_device_id
+        return self.home_assistant_entity_id
 
 
 @lru_cache

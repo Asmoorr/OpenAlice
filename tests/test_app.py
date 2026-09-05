@@ -217,6 +217,34 @@ def test_deferred_response_announces_when_ready(tmp_path: Path) -> None:
     assert result.json()["response"]["text"] == "Отложенный ответ"
 
 
+def test_deferred_response_uses_glagol_channel(tmp_path: Path) -> None:
+    fake_openclaw = FakeOpenClaw(answer="Отложенный ответ", delay=0.2)
+    fake_notifier = FakeNotifier()
+    app = create_app(
+        settings(
+            tmp_path / "test.db",
+            alice_fast_timeout_seconds=0.11,
+            notifications_enabled=True,
+            notification_provider="glagol",
+            glagol_device_id="device-1",
+            notification_poll_seconds=0.1,
+        ),
+        fake_openclaw,
+        fake_notifier,
+    )
+
+    with TestClient(app) as client:
+        client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("Долгий вопрос"),
+        )
+        time.sleep(0.25)
+
+    assert len(fake_notifier.notifications) == 1
+    assert fake_notifier.notifications[0].channel == "glagol"
+    assert fake_notifier.notifications[0].target == "device-1"
+
+
 def test_allowlist_and_wrong_secret(tmp_path: Path) -> None:
     fake = FakeOpenClaw()
     app = create_app(

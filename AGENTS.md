@@ -25,6 +25,8 @@ OpenClaw Gateway. FastAPI принимает webhook Яндекс Диалого
 - `openalice/logging.py` — типизированная обёртка для технических и пользовательских логов.
 - `openalice/pending_phrases.py` — выбор настраиваемой фразы ожидания ответа.
 - `openalice/notifications/` — очередь и сменные каналы уведомлений о готовности.
+- `openalice/glagol.py` — прямое локальное подключение к Яндекс Станции.
+- `openalice/glagol_setup.py` — авторизация Яндекса и поиск Станций в сети.
 - `openalice/text.py` — очистка и сокращение текста для озвучивания.
 - `scripts/run-openalice.ps1` — запуск на Windows.
 - `tests/` — тесты приложения, команд, хранилища и обработки текста.

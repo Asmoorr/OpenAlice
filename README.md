@@ -282,10 +282,15 @@ LOG_LEVEL=INFO
 - `ALICE_PENDING_PHRASES` — варианты ответа, пока результат не готов. Фразы
   разделяются символом `|`; чтобы добавить или удалить вариант, отредактируйте
   эту строку и перезапустите OpenAlice. Должна остаться хотя бы одна фраза.
-- `NOTIFICATIONS_ENABLED` — включает фоновое уведомление о готовности через
-  Home Assistant. При `false` приложение не обращается к Home Assistant.
+- `NOTIFICATIONS_ENABLED` — включает фоновое уведомление о готовности.
+- `NOTIFICATION_PROVIDER` — канал уведомления: `home_assistant` или `glagol`.
 - `HOME_ASSISTANT_URL`, `HOME_ASSISTANT_TOKEN` и `HOME_ASSISTANT_ENTITY_ID` —
   адрес API, долгоживущий токен и `entity_id` нужной Яндекс Станции.
+- `GLAGOL_DEVICE_ID`, `GLAGOL_PLATFORM`, `GLAGOL_HOST` и `GLAGOL_PORT` —
+  параметры прямого локального подключения. `HOST` можно не задавать: тогда
+  адрес и платформа ищутся по mDNS при каждой попытке доставки.
+- `GLAGOL_CREDENTIALS_PATH` — локальный файл токенов Яндекса. Он содержит
+  секреты в открытом виде, не должен синхронизироваться или попадать в Git.
 - `NOTIFICATION_READY_PHRASE` — короткая фраза, которую произнесёт Станция.
 - `NOTIFICATION_MAX_ATTEMPTS` и `NOTIFICATION_POLL_SECONDS` — количество попыток
   доставки и период проверки сохранённой очереди.
@@ -300,7 +305,8 @@ LOG_LEVEL=INFO
 
 ### Уведомление через Яндекс Станцию
 
-Автоматическое уведомление работает через REST API Home Assistant и компонент
+Поддерживаются два взаимозаменяемых канала. Стабильный вариант работает через
+REST API Home Assistant и компонент
 [AlexxIT/YandexStation](https://github.com/AlexxIT/YandexStation). Установите
 компонент через HACS, добавьте Станцию в Home Assistant и убедитесь, что у неё
 есть сущность вида `media_player.yandex_station_mini`.
@@ -315,6 +321,33 @@ SQLite. Фоновый worker отправляет короткую TTS-фраз
 `media_player.play_media`. Если Home Assistant недоступен, доставка повторяется,
 но сам результат остаётся доступен по команде «готово». При получении или отмене
 результата ещё не отправленное уведомление отменяется.
+
+Для прямого подключения без Home Assistant используется неофициальный локальный
+протокол Glagol. Компьютер и Станция должны находиться в одной локальной сети.
+Сначала выполните интерактивную авторизацию и найдите колонку:
+
+```powershell
+.\.venv\Scripts\python.exe -m openalice.glagol_setup login
+.\.venv\Scripts\python.exe -m openalice.glagol_setup discover
+```
+
+Первая команда покажет адрес и код входа Яндекса и сохранит полученные токены в
+`./data/glagol_credentials.json`. Вторая выведет готовые значения параметров
+устройств. Добавьте выбранные значения в `.env`, затем установите:
+
+```dotenv
+NOTIFICATIONS_ENABLED=true
+NOTIFICATION_PROVIDER=glagol
+GLAGOL_DEVICE_ID=идентификатор-из-discover
+GLAGOL_PLATFORM=платформа-из-discover
+GLAGOL_HOST=локальный-ip-из-discover
+GLAGOL_PORT=1961
+```
+
+`GLAGOL_HOST` допустимо оставить пустым для автоматического mDNS-поиска.
+Прямой канал зависит от закрытого протокола Яндекса и может перестать работать
+после изменения прошивки или серверной авторизации. Сбой произнесения не теряет
+подготовленный ответ: его по-прежнему можно получить командой «готово».
 
 Токен ngrok в `.env` OpenAlice не добавляется. Он хранится в конфигурации самой
 службы ngrok и берётся на странице

@@ -15,6 +15,14 @@ from openalice.alice_models import AliceWebhookRequest, AliceWebhookResponse, Al
 from openalice.commands import CommandIntent, detect_command_intent, normalize_command
 from openalice.config import Settings, get_settings
 from openalice.logging import LogType, get_logger
+from openalice.glagol import (
+    GlagolClient,
+    GlagolDevice,
+    JsonCredentialStore,
+    MdnsDeviceResolver,
+    PassportDeviceTokenProvider,
+    StaticDeviceResolver,
+)
 from openalice.openclaw_client import (
     AssistantClient,
     FakeOpenClawClient,
@@ -23,6 +31,7 @@ from openalice.openclaw_client import (
 )
 from openalice.notifications import (
     HomeAssistantNotifier,
+    GlagolNotifier,
     Notification,
     Notifier,
 )
@@ -67,6 +76,7 @@ def create_app(
                 resolved_notifier,
                 resolved.notification_max_attempts,
                 resolved.notification_poll_seconds,
+                resolved.notification_channel,
             )
             if resolved_notifier is not None
             else None
@@ -191,6 +201,29 @@ def _create_assistant_client(settings: Settings) -> AssistantClient:
 def _create_notifier(settings: Settings) -> Notifier | None:
     if not settings.notifications_enabled:
         return None
+    if settings.notification_provider == "glagol":
+        resolver = (
+            StaticDeviceResolver(
+                GlagolDevice(
+                    settings.glagol_device_id,
+                    settings.glagol_platform,
+                    settings.glagol_host,
+                    settings.glagol_port,
+                )
+            )
+            if settings.glagol_host
+            else MdnsDeviceResolver(settings.glagol_discovery_timeout_seconds)
+        )
+        token_provider = PassportDeviceTokenProvider(
+            JsonCredentialStore(settings.glagol_credentials_path)
+        )
+        return GlagolNotifier(
+            GlagolClient(
+                token_provider,
+                resolver,
+                settings.glagol_timeout_seconds,
+            )
+        )
     return HomeAssistantNotifier(
         settings.home_assistant_url,
         settings.home_assistant_token,
@@ -341,8 +374,8 @@ async def _save_deferred_result(
                 event_id=uuid.uuid4().hex,
                 conversation_id=conversation_id,
                 kind="answer_ready",
-                channel="home_assistant",
-                target=runtime.settings.home_assistant_entity_id,
+                channel=runtime.settings.notification_channel,
+                target=runtime.settings.notification_target,
                 text=runtime.settings.notification_ready_phrase,
             )
             await runtime.store.complete_job_and_enqueue_notification(
