@@ -7,6 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
@@ -51,6 +52,8 @@ class Runtime:
     pending_phrases: PendingPhraseProvider
     notification_worker: NotificationWorker | None
     pending_tasks: dict[str, asyncio.Task[str]] = field(default_factory=dict)
+    inflight_requests: dict[str, asyncio.Task[dict[str, Any]]] = field(default_factory=dict)
+    conversation_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 
 
 def create_app(
@@ -169,17 +172,31 @@ def create_app(
             )
             return JSONResponse(cached)
 
-        response = await _handle_request(runtime, request, raw_identity, request_ref, identity_ref)
-        response_dict = response.model_dump(exclude_none=True)
-        await runtime.store.cache_response(request_key, response_dict)
-        logger.info(
-            LogType.TECH,
-            "stage=webhook status=completed request=%s end_session=%s response_chars=%d elapsed_ms=%.1f",
-            request_ref,
-            response.response.end_session,
-            len(response.response.text),
-            _elapsed_ms(started),
-        )
+        async def process_request() -> dict[str, Any]:
+            response = await _handle_request(runtime, request, raw_identity, request_ref, identity_ref)
+            response_dict = response.model_dump(exclude_none=True)
+            await runtime.store.cache_response(request_key, response_dict)
+            logger.info(
+                LogType.TECH,
+                "stage=webhook status=completed request=%s end_session=%s response_chars=%d elapsed_ms=%.1f",
+                request_ref,
+                response.response.end_session,
+                len(response.response.text),
+                _elapsed_ms(started),
+            )
+            return response_dict
+
+        task = runtime.inflight_requests.get(request_key)
+        if task is None:
+            task = asyncio.create_task(process_request())
+            runtime.inflight_requests[request_key] = task
+        else:
+            logger.info(LogType.TECH, "stage=webhook status=inflight_join request=%s", request_ref)
+        try:
+            response_dict = await asyncio.shield(task)
+        finally:
+            if task.done() and runtime.inflight_requests.get(request_key) is task:
+                runtime.inflight_requests.pop(request_key, None)
         return JSONResponse(response_dict)
 
     return app
@@ -195,6 +212,7 @@ def _create_assistant_client(settings: Settings) -> AssistantClient:
         settings.openclaw_base_url,
         settings.openclaw_gateway_token,
         settings.openclaw_agent,
+        settings.openclaw_timeout_seconds,
     )
 
 
@@ -266,12 +284,14 @@ async def _handle_request(
         logger.info(LogType.USER, "event=session_closed request=%s user=%s", request_ref, identity_ref)
         return _alice_response("До встречи.", end_session=True)
     if intent is CommandIntent.NEW_DIALOG:
-        await _cancel_pending(runtime, conversation_id)
-        await runtime.store.increment_generation(identity_hash)
+        async with _conversation_lock(runtime, conversation_id):
+            await _cancel_pending(runtime, conversation_id)
+            await runtime.store.increment_generation(identity_hash)
         logger.info(LogType.USER, "event=new_dialog_started request=%s user=%s", request_ref, identity_ref)
         return _alice_response("Начинаю новый диалог. О чём поговорим?")
     if intent is CommandIntent.CANCEL:
-        cancelled = await _cancel_pending(runtime, conversation_id)
+        async with _conversation_lock(runtime, conversation_id):
+            cancelled = await _cancel_pending(runtime, conversation_id)
         logger.info(LogType.USER, "event=request_cancelled request=%s user=%s existed=%s", request_ref, identity_ref, cancelled)
         return _alice_response("Запрос отменён." if cancelled else "Сейчас нет ожидающего запроса.")
     if intent is CommandIntent.RESULT:
@@ -280,17 +300,21 @@ async def _handle_request(
     if not command:
         return _alice_response("Я вас не расслышала. Повторите вопрос.")
 
-    existing = await runtime.store.get_job(conversation_id)
-    if existing and existing["status"] == "pending":
-        logger.info(LogType.TECH, "stage=openclaw status=already_pending request=%s user=%s", request_ref, identity_ref)
-        logger.info(LogType.USER, "event=question_rejected reason=request_pending request=%s user=%s", request_ref, identity_ref)
-        return _alice_response(runtime.pending_phrases.choose())
+    async with _conversation_lock(runtime, conversation_id):
+        existing = await runtime.store.get_job(conversation_id)
+        if existing and existing["status"] == "pending":
+            logger.info(LogType.TECH, "stage=openclaw status=already_pending request=%s user=%s", request_ref, identity_ref)
+            logger.info(LogType.USER, "event=question_rejected reason=request_pending request=%s user=%s", request_ref, identity_ref)
+            return _alice_response(runtime.pending_phrases.choose())
 
-    logger.info(LogType.TECH, "stage=openclaw status=started request=%s user=%s", request_ref, identity_ref)
-    logger.info(LogType.USER, "event=question_accepted request=%s user=%s", request_ref, identity_ref)
-    openclaw_started = time.perf_counter()
-    task = asyncio.create_task(runtime.openclaw.ask(command, conversation_id))
-    runtime.pending_tasks[conversation_id] = task
+        # Reserve the conversation before yielding to OpenClaw. Otherwise a second
+        # webhook can start another request with the same stable OpenResponses user.
+        await runtime.store.set_job(conversation_id, "pending")
+        logger.info(LogType.TECH, "stage=openclaw status=started request=%s user=%s", request_ref, identity_ref)
+        logger.info(LogType.USER, "event=question_accepted request=%s user=%s", request_ref, identity_ref)
+        openclaw_started = time.perf_counter()
+        task = asyncio.create_task(runtime.openclaw.ask(command, conversation_id))
+        runtime.pending_tasks[conversation_id] = task
     done, _ = await asyncio.wait({task}, timeout=runtime.settings.alice_fast_timeout_seconds)
     if task in done:
         runtime.pending_tasks.pop(conversation_id, None)
@@ -304,6 +328,7 @@ async def _handle_request(
                 identity_ref,
                 _elapsed_ms(openclaw_started),
             )
+            await runtime.store.delete_job(conversation_id)
             return _alice_response("Домашний помощник сейчас недоступен. Попробуйте ещё раз позже.")
         await runtime.store.delete_job(conversation_id)
         logger.info(
@@ -317,7 +342,6 @@ async def _handle_request(
         logger.info(LogType.USER, "event=answer_delivered request=%s user=%s mode=immediate", request_ref, identity_ref)
         return _alice_response(shorten_for_alice(answer, runtime.settings.alice_max_response_chars))
 
-    await runtime.store.set_job(conversation_id, "pending")
     logger.info(
         LogType.TECH,
         "stage=openclaw status=deferred request=%s user=%s elapsed_ms=%.1f",
@@ -342,12 +366,13 @@ async def _save_deferred_result(
         identity_ref: str,
         started: float,
 ) -> None:
+    if runtime.pending_tasks.get(conversation_id) is not task:
+        return
     runtime.pending_tasks.pop(conversation_id, None)
     try:
         answer = task.result()
     except asyncio.CancelledError:
         logger.info(LogType.TECH, "stage=openclaw status=cancelled request=%s user=%s", request_ref, identity_ref)
-        await runtime.store.set_job(conversation_id, "failed", error="Запрос был отменён.")
     except Exception as exc:
         logger.warning(
             LogType.TECH,
@@ -411,6 +436,10 @@ async def _cancel_pending(runtime: Runtime, conversation_id: str) -> bool:
         task.cancel()
     await runtime.store.delete_job(conversation_id)
     return task is not None or job is not None
+
+
+def _conversation_lock(runtime: Runtime, conversation_id: str) -> asyncio.Lock:
+    return runtime.conversation_locks.setdefault(conversation_id, asyncio.Lock())
 
 
 def _raw_identity(request: AliceWebhookRequest) -> str:

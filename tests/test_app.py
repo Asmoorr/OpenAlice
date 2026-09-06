@@ -1,6 +1,8 @@
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 from fastapi.testclient import TestClient
 
@@ -50,7 +52,7 @@ def settings(database_path: Path, **overrides: object) -> Settings:
         "database_path": database_path,
     }
     values.update(overrides)
-    return Settings(**values)
+    return Settings(_env_file=None, **values)
 
 
 def alice_request(command: str, message_id: int = 1, new: bool = False) -> dict[str, object]:
@@ -140,6 +142,52 @@ def test_fast_openclaw_response_and_deduplication(tmp_path: Path) -> None:
     assert len(fake.calls) == 1
 
 
+def test_concurrent_duplicate_webhooks_share_one_request(tmp_path: Path) -> None:
+    fake = FakeOpenClaw(delay=0.1)
+    app = create_app(
+        settings(tmp_path / "test.db", alice_fast_timeout_seconds=0.5),
+        fake,
+    )
+    barrier = Barrier(2)
+
+    with TestClient(app) as client:
+        def send() -> dict[str, object]:
+            barrier.wait()
+            return client.post(
+                "/alice/webhook/a-very-long-test-secret",
+                json=alice_request("Одинаковый вопрос"),
+            ).json()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _: send(), range(2)))
+
+    assert responses[0] == responses[1]
+    assert len(fake.calls) == 1
+
+
+def test_concurrent_messages_for_one_user_start_only_one_openclaw_request(tmp_path: Path) -> None:
+    fake = FakeOpenClaw(delay=0.3)
+    app = create_app(
+        settings(tmp_path / "test.db", alice_fast_timeout_seconds=0.11),
+        fake,
+    )
+    barrier = Barrier(2)
+
+    with TestClient(app) as client:
+        def send(message_id: int) -> dict[str, object]:
+            barrier.wait()
+            return client.post(
+                "/alice/webhook/a-very-long-test-secret",
+                json=alice_request(f"Вопрос {message_id}", message_id=message_id),
+            ).json()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(send, (1, 2)))
+
+    assert all(response["response"]["text"] in DEFAULT_PENDING_PHRASES for response in responses)
+    assert len(fake.calls) == 1
+
+
 def test_deferred_response(tmp_path: Path) -> None:
     fake = FakeOpenClaw(answer="Отложенный ответ", delay=0.3)
     app = create_app(
@@ -156,6 +204,33 @@ def test_deferred_response(tmp_path: Path) -> None:
         )
 
     assert result.json()["response"]["text"] == "Отложенный ответ"
+
+
+def test_cancelled_deferred_request_does_not_reappear(tmp_path: Path) -> None:
+    fake = FakeOpenClaw(delay=0.3)
+    app = create_app(
+        settings(tmp_path / "test.db", alice_fast_timeout_seconds=0.11),
+        fake,
+    )
+
+    with TestClient(app) as client:
+        pending = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("Долгий вопрос"),
+        )
+        cancelled = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("отмена", message_id=2),
+        )
+        time.sleep(0.05)
+        result = client.post(
+            "/alice/webhook/a-very-long-test-secret",
+            json=alice_request("готово", message_id=3),
+        )
+
+    assert pending.json()["response"]["text"] in DEFAULT_PENDING_PHRASES
+    assert cancelled.json()["response"]["text"] == "Запрос отменён."
+    assert result.json()["response"]["text"] == "Нет ожидающего ответа. Задайте новый вопрос."
 
 
 def test_deferred_response_uses_configured_pending_phrase(tmp_path: Path) -> None:

@@ -1,0 +1,29 @@
+meta {
+  name: Test Openclaw request
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://127.0.0.1:18789/v1/responses
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: 726d5ddb15c847e183df22f0a8cbc2aa6255fd8dd8ed43788fb0dd12fd3d9dbf
+}
+
+body:json {
+  {
+    "model": "openclaw/default",
+    "input": "Расскажи о себе",
+    "user": "random_123123",
+    "instructions": "Отвечай по-русски, пригодным для озвучивания текстом без Markdown. Сначала дай краткий полезный ответ, желательно до 800 символов."
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
