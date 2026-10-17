@@ -1,0 +1,1 @@
+"""Yandex Dialogs protocol adapter."""

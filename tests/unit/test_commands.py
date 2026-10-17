@@ -1,6 +1,6 @@
 import pytest
 
-from openalice.commands import CommandIntent, detect_command_intent
+from openalice.application.command_parser import CommandIntent, detect_command_intent
 
 
 @pytest.mark.parametrize(

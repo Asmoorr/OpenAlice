@@ -1,15 +1,8 @@
-from typing import Protocol
-
 import httpx
 
-from openalice.glagol import GlagolClient
-from openalice.notifications.models import Notification
-
-
-class Notifier(Protocol):
-    async def notify(self, notification: Notification) -> None: ...
-
-    async def close(self) -> None: ...
+from openalice.application.ports import Notifier
+from openalice.domain.models import Notification
+from openalice.infrastructure.glagol import GlagolClient
 
 
 class NoOpNotifier:
@@ -22,11 +15,11 @@ class NoOpNotifier:
 
 class HomeAssistantNotifier:
     def __init__(
-            self,
-            base_url: str,
-            token: str,
-            timeout_seconds: float,
-            transport: httpx.AsyncBaseTransport | None = None,
+        self,
+        base_url: str,
+        token: str,
+        timeout_seconds: float,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
@@ -59,3 +52,6 @@ class GlagolNotifier:
 
     async def close(self) -> None:
         await self._client.close()
+
+
+__all__ = ["GlagolNotifier", "HomeAssistantNotifier", "NoOpNotifier", "Notifier"]

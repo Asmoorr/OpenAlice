@@ -1,24 +1,51 @@
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
+
+from openalice.application.ports import AssistantError, AssistantGateway
 from openalice.logging import LogType, get_logger
 
 logger = get_logger("openalice.openclaw")
 
-_MAX_ATTEMPTS = 8
-_RETRYABLE_STATUSES = {502, 503, 504}
 
-
-class OpenClawError(RuntimeError):
+class OpenClawError(AssistantError):
     pass
 
 
-class AssistantClient(Protocol):
-    async def ask(self, message: str, user: str) -> str: ...
+class RetryStrategy(Protocol):
+    @property
+    def max_attempts(self) -> int: ...
 
-    async def close(self) -> None: ...
+    def should_retry_status(self, status: int) -> bool: ...
+
+    def delay_seconds(self, attempt: int) -> float: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ExponentialBackoffRetry:
+    max_attempts: int = 8
+    retryable_statuses: frozenset[int] = frozenset({502, 503, 504})
+    initial_delay_seconds: float = 0.5
+    maximum_delay_seconds: float = 8.0
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError("Retry policy requires at least one attempt")
+        if self.initial_delay_seconds < 0 or self.maximum_delay_seconds < 0:
+            raise ValueError("Retry delays must not be negative")
+
+    def should_retry_status(self, status: int) -> bool:
+        return status in self.retryable_statuses
+
+    def delay_seconds(self, attempt: int) -> float:
+        return float(min(self.initial_delay_seconds * (2**attempt), self.maximum_delay_seconds))
+
+
+AssistantClient = AssistantGateway
 
 
 class FakeOpenClawClient:
@@ -41,19 +68,31 @@ class FakeOpenClawClient:
         if self._delay_seconds:
             await asyncio.sleep(self._delay_seconds)
         logger.info(
-            LogType.TECH,
-            "stage=fake_gateway status=response answer_chars=%d", len(self._response)
+            LogType.TECH, "stage=fake_gateway status=response answer_chars=%d", len(self._response)
         )
         return self._response
 
 
 class OpenClawClient:
-    def __init__(self, base_url: str, token: str, agent: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        agent: str,
+        timeout_seconds: float = 300.0,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        retry_strategy: RetryStrategy | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._agent = agent
+        self._retry = retry_strategy or ExponentialBackoffRetry()
+        self._sleep = sleep
         self._client = httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {token}"},
-            timeout=httpx.Timeout(120.0, connect=5.0),
+            timeout=httpx.Timeout(timeout_seconds, connect=5.0),
+            transport=transport,
         )
 
     async def close(self) -> None:
@@ -71,7 +110,7 @@ class OpenClawClient:
             ),
         }
         response: httpx.Response | None = None
-        for attempt in range(_MAX_ATTEMPTS):
+        for attempt in range(self._retry.max_attempts):
             logger.info(
                 LogType.TECH,
                 "stage=gateway status=requesting attempt=%d model=%s input_chars=%d",
@@ -92,8 +131,11 @@ class OpenClawClient:
                 break
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
-                if status in _RETRYABLE_STATUSES and attempt < _MAX_ATTEMPTS - 1:
-                    retry_delay = min(0.5 * (2**attempt), 8.0)
+                if (
+                    self._retry.should_retry_status(status)
+                    and attempt < self._retry.max_attempts - 1
+                ):
+                    retry_delay = self._retry.delay_seconds(attempt)
                     logger.warning(
                         LogType.TECH,
                         "stage=gateway status=retrying attempt=%d http_status=%d delay_seconds=%.1f",
@@ -101,15 +143,15 @@ class OpenClawClient:
                         status,
                         retry_delay,
                     )
-                    await asyncio.sleep(retry_delay)
+                    await self._sleep(retry_delay)
                     continue
                 detail = _response_error_detail(exc.response)
                 raise OpenClawError(
                     f"OpenClaw request failed with HTTP {status}: {detail}"
                 ) from exc
             except httpx.RequestError as exc:
-                if attempt < _MAX_ATTEMPTS - 1:
-                    retry_delay = min(0.5 * (2**attempt), 8.0)
+                if attempt < self._retry.max_attempts - 1:
+                    retry_delay = self._retry.delay_seconds(attempt)
                     logger.warning(
                         LogType.TECH,
                         "stage=gateway status=retrying attempt=%d error=%s delay_seconds=%.1f",
@@ -117,7 +159,7 @@ class OpenClawClient:
                         type(exc).__name__,
                         retry_delay,
                     )
-                    await asyncio.sleep(retry_delay)
+                    await self._sleep(retry_delay)
                     continue
                 raise OpenClawError(f"OpenClaw request failed: {exc}") from exc
 

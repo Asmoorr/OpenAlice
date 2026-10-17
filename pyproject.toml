@@ -20,11 +20,36 @@ dependencies = [
 dev = [
     "pytest>=8.4,<9.0",
     "pytest-asyncio>=1.1,<2.0",
+    "pytest-cov>=7.0,<8.0",
+    "ruff>=0.17,<0.18",
+    "mypy>=2.4,<3.0",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "--basetemp=.test-tmp -p no:cacheprovider"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["openalice"]
+check_untyped_defs = true
+strict = true
+
+[tool.coverage.run]
+branch = true
+source = ["openalice"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
 
 
 [build-system]

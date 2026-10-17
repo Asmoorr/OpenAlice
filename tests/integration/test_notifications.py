@@ -3,10 +3,10 @@ from pathlib import Path
 
 import httpx
 
-from openalice.notifications.models import Notification
-from openalice.notifications.notifiers import HomeAssistantNotifier
-from openalice.notifications.worker import NotificationWorker
-from openalice.store import Store
+from openalice.domain.models import Notification
+from openalice.infrastructure.notifications.notifiers import HomeAssistantNotifier
+from openalice.infrastructure.notifications.worker import NotificationWorker
+from openalice.infrastructure.persistence import SqliteStore as Store
 
 
 def notification(event_id: str = "event-1") -> Notification:
@@ -69,7 +69,7 @@ async def test_worker_delivers_persisted_notification(tmp_path: Path) -> None:
     store = Store(tmp_path / "notifications.db")
     await store.initialize()
     item = notification()
-    await store.complete_job_and_enqueue_notification(
+    await store.complete_with_notification(
         item.conversation_id,
         "Полный ответ",
         item,
@@ -93,7 +93,7 @@ async def test_consumed_job_cancels_pending_notification(tmp_path: Path) -> None
     store = Store(tmp_path / "notifications.db")
     await store.initialize()
     item = notification()
-    await store.complete_job_and_enqueue_notification(
+    await store.complete_with_notification(
         item.conversation_id,
         "Полный ответ",
         item,
@@ -108,7 +108,7 @@ async def test_notification_failure_does_not_remove_ready_answer(tmp_path: Path)
     store = Store(tmp_path / "notifications.db")
     await store.initialize()
     item = notification()
-    await store.complete_job_and_enqueue_notification(
+    await store.complete_with_notification(
         item.conversation_id,
         "Полный ответ",
         item,
@@ -122,6 +122,6 @@ async def test_notification_failure_does_not_remove_ready_answer(tmp_path: Path)
 
     job = await store.get_job(item.conversation_id)
     assert job is not None
-    assert job["status"] == "done"
-    assert job["response"] == "Полный ответ"
+    assert job.status.value == "done"
+    assert job.response == "Полный ответ"
     assert await store.get_pending_notifications() == []

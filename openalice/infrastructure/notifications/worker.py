@@ -1,20 +1,20 @@
 import asyncio
 
+from openalice.application.ports import Notifier
+from openalice.infrastructure.persistence import SqliteStore as Store
 from openalice.logging import LogType, get_logger
-from openalice.notifications.notifiers import Notifier
-from openalice.store import Store
 
 logger = get_logger("openalice.notifications")
 
 
 class NotificationWorker:
     def __init__(
-            self,
-            store: Store,
-            notifier: Notifier,
-            max_attempts: int,
-            poll_seconds: float,
-            channel: str | None = None,
+        self,
+        store: Store,
+        notifier: Notifier,
+        max_attempts: int,
+        poll_seconds: float,
+        channel: str | None = None,
     ) -> None:
         self._store = store
         self._notifier = notifier
@@ -59,7 +59,7 @@ class NotificationWorker:
             except Exception as exc:
                 attempt = notification.attempts + 1
                 exhausted = attempt >= self._max_attempts
-                retry_delay = min(2 ** attempt, 60)
+                retry_delay = min(2**attempt, 60)
                 await self._store.mark_notification_failed(
                     notification.event_id,
                     attempt,

@@ -90,9 +90,13 @@ class Settings(BaseSettings):
         if self.notifications_enabled:
             if self.notification_provider == "home_assistant":
                 if not self.home_assistant_token:
-                    raise ValueError("HOME_ASSISTANT_TOKEN is required for Home Assistant notifications")
+                    raise ValueError(
+                        "HOME_ASSISTANT_TOKEN is required for Home Assistant notifications"
+                    )
                 if not self.home_assistant_entity_id:
-                    raise ValueError("HOME_ASSISTANT_ENTITY_ID is required for Home Assistant notifications")
+                    raise ValueError(
+                        "HOME_ASSISTANT_ENTITY_ID is required for Home Assistant notifications"
+                    )
             elif not self.glagol_device_id:
                 raise ValueError("GLAGOL_DEVICE_ID is required for Glagol notifications")
             elif self.glagol_host and not self.glagol_platform:

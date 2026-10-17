@@ -1,3 +1,5 @@
+"""Adapters for direct communication with a Yandex Station."""
+
 from __future__ import annotations
 
 import asyncio
@@ -52,21 +54,29 @@ class JsonCredentialStore:
             payload = json.loads(await asyncio.to_thread(self._path.read_text, encoding="utf-8"))
             return Credentials(
                 x_token=SecretStr(payload["x_token"]),
-                music_token=SecretStr(payload["music_token"]) if payload.get("music_token") else None,
+                music_token=SecretStr(payload["music_token"])
+                if payload.get("music_token")
+                else None,
                 uid=payload.get("uid"),
                 display_login=payload.get("display_login"),
-                refresh_token=SecretStr(payload["refresh_token"]) if payload.get("refresh_token") else None,
+                refresh_token=SecretStr(payload["refresh_token"])
+                if payload.get("refresh_token")
+                else None,
             )
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise GlagolError("Glagol credentials are missing or invalid; run setup first") from exc
 
     async def save(self, credentials: Credentials) -> None:
-        payload = {
+        payload: dict[str, object] = {
             "x_token": credentials.x_token.get_secret(),
-            "music_token": credentials.music_token.get_secret() if credentials.music_token else None,
+            "music_token": credentials.music_token.get_secret()
+            if credentials.music_token
+            else None,
             "uid": credentials.uid,
             "display_login": credentials.display_login,
-            "refresh_token": credentials.refresh_token.get_secret() if credentials.refresh_token else None,
+            "refresh_token": credentials.refresh_token.get_secret()
+            if credentials.refresh_token
+            else None,
         }
         await asyncio.to_thread(self._save_sync, payload)
 
@@ -99,6 +109,7 @@ class PassportDeviceTokenProvider:
                     refresh_token=credentials.refresh_token,
                 )
                 await self._store.save(credentials)
+            assert credentials.music_token is not None
             try:
                 return await passport.get_glagol_device_token(
                     credentials.music_token,
@@ -119,7 +130,9 @@ class PassportDeviceTokenProvider:
                         platform=platform,
                     )
                 except Exception as refresh_exc:
-                    raise GlagolError("Yandex rejected the stored Glagol credentials") from refresh_exc
+                    raise GlagolError(
+                        "Yandex rejected the stored Glagol credentials"
+                    ) from refresh_exc
 
 
 class MdnsDeviceResolver:
@@ -150,16 +163,16 @@ class MdnsDeviceResolver:
             }
             device_id = properties.get("deviceId")
             platform = properties.get("platform")
-            if not device_id or not platform or not info.addresses:
+            if not device_id or not platform or not info.addresses or info.port is None:
                 return
             host = str(ipaddress.ip_address(info.addresses[0]))
             devices[device_id] = GlagolDevice(device_id, platform, host, info.port)
 
         def handler(
-                zeroconf: object,
-                service_type: str,
-                name: str,
-                state_change: ServiceStateChange,
+            zeroconf: object,
+            service_type: str,
+            name: str,
+            state_change: ServiceStateChange,
         ) -> None:
             del zeroconf
             if state_change is not ServiceStateChange.Removed:
@@ -189,11 +202,11 @@ class StaticDeviceResolver:
 
 class GlagolClient:
     def __init__(
-            self,
-            token_provider: DeviceTokenProvider,
-            resolver: DeviceResolver,
-            timeout_seconds: float = 5.0,
-            session: aiohttp.ClientSession | None = None,
+        self,
+        token_provider: DeviceTokenProvider,
+        resolver: DeviceResolver,
+        timeout_seconds: float = 5.0,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         self._token_provider = token_provider
         self._resolver = resolver
@@ -228,9 +241,14 @@ class GlagolClient:
                                 response = json.loads(message.data)
                                 if response.get("requestId") == request_id:
                                     if response.get("status") != "success":
-                                        raise GlagolError("Yandex Station rejected the speech request")
+                                        raise GlagolError(
+                                            "Yandex Station rejected the speech request"
+                                        )
                                     return
-                            elif message.type in {aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED}:
+                            elif message.type in {
+                                aiohttp.WSMsgType.ERROR,
+                                aiohttp.WSMsgType.CLOSED,
+                            }:
                                 break
             except GlagolError:
                 raise

@@ -1,13 +1,17 @@
 import asyncio
 import json
 import sqlite3
+from collections.abc import Mapping
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from openalice.notifications.models import Notification
+from openalice.domain.models import Job, JobStatus, Notification
 
 
-class Store:
+class SqliteStore:
+    """SQLite adapter implementing the application's repository ports."""
+
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = asyncio.Lock()
@@ -58,8 +62,10 @@ class Store:
             """
         )
 
-    async def set_job(self, conversation_id: str, status: str, response: str | None = None,
-                      error: str | None = None) -> None:
+    async def close(self) -> None:
+        """Connections are operation-scoped, so no resource remains open."""
+
+    async def set_job(self, conversation_id: str, job: Job) -> None:
         await self._execute(
             """
             INSERT INTO jobs(conversation_id, status, response, error, updated_at)
@@ -68,17 +74,17 @@ class Store:
               status=excluded.status, response=excluded.response,
               error=excluded.error, updated_at=CURRENT_TIMESTAMP
             """,
-            (conversation_id, status, response, error),
+            (conversation_id, job.status.value, job.response, job.error),
         )
 
-    async def get_job(self, conversation_id: str) -> dict[str, Any] | None:
+    async def get_job(self, conversation_id: str) -> Job | None:
         row = await self._fetchone(
             "SELECT status, response, error FROM jobs WHERE conversation_id = ?",
             (conversation_id,),
         )
         if row is None:
             return None
-        return {"status": row[0], "response": row[1], "error": row[2]}
+        return Job(JobStatus(row[0]), response=row[1], error=row[2])
 
     async def delete_job(self, conversation_id: str) -> None:
         await self._execute_transaction(
@@ -92,11 +98,11 @@ class Store:
             )
         )
 
-    async def complete_job_and_enqueue_notification(
-            self,
-            conversation_id: str,
-            response: str,
-            notification: Notification,
+    async def complete_with_notification(
+        self,
+        conversation_id: str,
+        response: str,
+        notification: Notification,
     ) -> None:
         await self._execute_transaction(
             (
@@ -156,12 +162,12 @@ class Store:
         )
 
     async def mark_notification_failed(
-            self,
-            event_id: str,
-            attempts: int,
-            error: str,
-            retry_delay_seconds: int,
-            exhausted: bool,
+        self,
+        event_id: str,
+        attempts: int,
+        error: str,
+        retry_delay_seconds: int,
+        exhausted: bool,
     ) -> None:
         await self._execute(
             """
@@ -186,10 +192,10 @@ class Store:
         )
         return json.loads(row[0]) if row else None
 
-    async def cache_response(self, request_key: str, response: dict[str, Any]) -> None:
+    async def cache_response(self, request_key: str, response: Mapping[str, Any]) -> None:
         await self._execute(
             "INSERT OR REPLACE INTO request_cache(request_key, response_json) VALUES (?, ?)",
-            (request_key, json.dumps(response, ensure_ascii=False)),
+            (request_key, json.dumps(dict(response), ensure_ascii=False)),
         )
 
     async def get_generation(self, identity_hash: str) -> int:
@@ -200,21 +206,24 @@ class Store:
         return int(row[0]) if row else 0
 
     async def increment_generation(self, identity_hash: str) -> int:
-        await self._execute(
+        row = await self._fetchone(
             """
             INSERT INTO generations(identity_hash, generation) VALUES (?, 1)
             ON CONFLICT(identity_hash) DO UPDATE SET generation = generation + 1
+            RETURNING generation
             """,
             (identity_hash,),
         )
-        return await self.get_generation(identity_hash)
+        if row is None:  # pragma: no cover - SQLite RETURNING always yields a row
+            raise RuntimeError("Generation update returned no value")
+        return int(row[0])
 
     async def _execute_script(self, script: str) -> None:
         async with self._lock:
             await asyncio.to_thread(self._execute_script_sync, script)
 
     def _execute_script_sync(self, script: str) -> None:
-        with sqlite3.connect(self._path) as connection:
+        with closing(sqlite3.connect(self._path)) as connection, connection:
             connection.executescript(script)
 
     async def _execute(self, sql: str, params: tuple[Any, ...]) -> None:
@@ -222,21 +231,21 @@ class Store:
             await asyncio.to_thread(self._execute_sync, sql, params)
 
     def _execute_sync(self, sql: str, params: tuple[Any, ...]) -> None:
-        with sqlite3.connect(self._path) as connection:
+        with closing(sqlite3.connect(self._path)) as connection, connection:
             connection.execute(sql, params)
 
     async def _execute_transaction(
-            self,
-            statements: tuple[tuple[str, tuple[Any, ...]], ...],
+        self,
+        statements: tuple[tuple[str, tuple[Any, ...]], ...],
     ) -> None:
         async with self._lock:
             await asyncio.to_thread(self._execute_transaction_sync, statements)
 
     def _execute_transaction_sync(
-            self,
-            statements: tuple[tuple[str, tuple[Any, ...]], ...],
+        self,
+        statements: tuple[tuple[str, tuple[Any, ...]], ...],
     ) -> None:
-        with sqlite3.connect(self._path) as connection:
+        with closing(sqlite3.connect(self._path)) as connection, connection:
             for sql, params in statements:
                 connection.execute(sql, params)
 
@@ -245,15 +254,16 @@ class Store:
             return await asyncio.to_thread(self._fetchone_sync, sql, params)
 
     def _fetchone_sync(self, sql: str, params: tuple[Any, ...]) -> tuple[Any, ...] | None:
-        with sqlite3.connect(self._path) as connection:
+        with closing(sqlite3.connect(self._path)) as connection, connection:
             cursor = connection.execute(sql, params)
-            return cursor.fetchone()
+            row = cursor.fetchone()
+            return tuple(row) if row is not None else None
 
     async def _fetchall(self, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
         async with self._lock:
             return await asyncio.to_thread(self._fetchall_sync, sql, params)
 
     def _fetchall_sync(self, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
-        with sqlite3.connect(self._path) as connection:
+        with closing(sqlite3.connect(self._path)) as connection, connection:
             cursor = connection.execute(sql, params)
             return cursor.fetchall()

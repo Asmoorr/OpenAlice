@@ -3,10 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from ya_passport_auth import PassportClient
 
-from openalice.glagol import JsonCredentialStore, MdnsDeviceResolver
+from openalice.infrastructure.glagol import JsonCredentialStore, MdnsDeviceResolver
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -25,7 +26,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 async def _login(path: Path) -> None:
-    def show_code(session: object) -> None:
+    def show_code(session: Any) -> None:
         print(f"Откройте {session.verification_url} и введите код: {session.user_code}")
 
     async with PassportClient.create() as passport:
