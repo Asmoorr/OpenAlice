@@ -1,0 +1,14 @@
+meta {
+  name: OpenAlice
+  seq: 1
+}
+script:pre-request {
+  const secret = bru.getEnvVar("webhook_secret") || bru.getProcessEnv("ALICE_WEBHOOK_SECRET");
+  if (!secret) {
+    throw new Error("Задайте ALICE_WEBHOOK_SECRET в локальном .env коллекции");
+  }
+  bru.setVar("webhook_secret", secret);
+  if (!bru.getVar("run_id")) {
+    bru.setVar("run_id", String(Date.now()));
+  }
+}

@@ -16,18 +16,18 @@ OpenClaw Gateway. FastAPI принимает webhook Яндекс Диалого
 
 ## Основные файлы
 
-- `openalice/app.py` — FastAPI, команды, дедлайн и отложенные ответы.
-- `openalice/openclaw_client.py` — клиент OpenClaw и повторы при 502/503/504.
-- `openalice/commands.py` — распознавание служебных команд по шаблонам.
-- `openalice/alice_models.py` — модели протокола Яндекс Диалогов.
-- `openalice/store.py` — асинхронный интерфейс SQLite.
+- `openalice/app.py` и `bootstrap.py` — стабильный entry point и сборка зависимостей.
+- `openalice/application/` — команды, дедлайн, координация и отложенные ответы.
+- `openalice/domain/` — типизированные значения, состояния и преобразование текста.
+- `openalice/presentation/alice/` — HTTP-адаптер и модели Яндекс Диалогов.
+- `openalice/infrastructure/gateway/` — OpenClaw и повторы при 502/503/504.
+- `openalice/infrastructure/persistence/` — асинхронный SQLite adapter.
 - `openalice/config.py` — настройки из `.env`.
 - `openalice/logging.py` — типизированная обёртка для технических и пользовательских логов.
 - `openalice/pending_phrases.py` — выбор настраиваемой фразы ожидания ответа.
-- `openalice/notifications/` — очередь и сменные каналы уведомлений о готовности.
-- `openalice/glagol.py` — прямое локальное подключение к Яндекс Станции.
+- `openalice/infrastructure/notifications/` — очередь и сменные каналы уведомлений.
+- `openalice/infrastructure/glagol.py` — прямое локальное подключение к Станции.
 - `openalice/glagol_setup.py` — авторизация Яндекса и поиск Станций в сети.
-- `openalice/text.py` — очистка и сокращение текста для озвучивания.
 - `scripts/run-openalice.ps1` — запуск на Windows.
 - `tests/` — тесты приложения, команд, хранилища и обработки текста.
 
@@ -61,7 +61,7 @@ ngrok http 8765
 ## Проверка изменений
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+.\scripts\check.ps1
 ```
 
 Перед завершением работы запускайте весь набор тестов. При изменении команд,
@@ -88,7 +88,7 @@ ngrok http 8765
 - Пользовательские ответы писать по-русски, кратко и без Markdown, пригодными
   для озвучивания.
 - Полная инструкция по установке, публикации навыка и автозапуску находится в
-  `README.md`.
+`docs/` (карта документации находится в `docs/index.md`).
 
 ## Стиль коммитов
 

@@ -1,0 +1,20 @@
+meta {
+  name: Denied user (requires allowlist)
+  type: http
+  seq: 1
+}
+post {
+  url: {{base_url}}/alice/webhook/{{webhook_secret}}
+  body: json
+  auth: none
+}
+body:json {
+  {"request":{"command":"Вопрос"},"session":{"session_id":"denied","message_id":1,"application":{"application_id":"denied-app"},"user":{"user_id":"denied-test-user"}}}
+}
+tests {
+  test("allowlist rejects unknown user", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().response.end_session).to.equal(true);
+    expect(res.getBody().response.text).to.equal("У этого аккаунта нет доступа к навыку.");
+  });
+}

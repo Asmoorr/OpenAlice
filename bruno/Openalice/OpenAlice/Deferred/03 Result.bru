@@ -1,0 +1,43 @@
+meta {
+  name: 03 Result
+  type: http
+  seq: 13
+}
+post {
+  url: {{base_url}}/alice/webhook/{{webhook_secret}}
+  body: json
+  auth: none
+}
+body:json {
+  {
+    "request": {
+      "command": "готово",
+      "original_utterance": "готово",
+      "type": "SimpleUtterance"
+    },
+    "session": {
+      "message_id": 3,
+      "session_id": "{{run_id}}-deferred",
+      "skill_id": "bruno-skill",
+      "new": false,
+      "application": {
+        "application_id": "bruno-app"
+      },
+      "user": {
+        "user_id": "{{user_id}}-deferred-{{run_id}}"
+      }
+    },
+    "version": "1.0"
+  }
+}
+tests {
+  test("Alice response contract", function () {
+    expect(res.getStatus()).to.equal(200);
+    const body = res.getBody();
+    expect(body.version).to.equal("1.0");
+    expect(body.response.text).to.be.a("string").and.not.empty;
+    expect(body.response.tts).to.equal(body.response.text);
+    expect(body.response.end_session).to.equal(false);
+    expect(body.response.text).to.contain(bru.getEnvVar("fake_answer"));
+  });
+}
